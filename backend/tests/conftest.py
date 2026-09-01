@@ -1,0 +1,155 @@
+"""Shared pytest fixtures: an isolated TestClient and generated sample files."""
+
+from __future__ import annotations
+
+import io
+import shutil
+from pathlib import Path
+
+import pytest
+from docx import Document as DocxDocument
+from fastapi.testclient import TestClient
+from PIL import Image
+from pptx import Presentation
+from pptx.util import Inches
+
+
+@pytest.fixture()
+def client(tmp_path, monkeypatch):
+    """
+    Provide a TestClient wired to isolated, temporary storage directories so
+    tests never touch (or pollute) the real backend/data folder.
+    """
+    uploads_dir = tmp_path / "uploads"
+    documents_dir = tmp_path / "documents"
+    uploads_dir.mkdir()
+    documents_dir.mkdir()
+
+    import config
+
+    monkeypatch.setattr(config, "UPLOADS_DIR", uploads_dir)
+    monkeypatch.setattr(config, "DOCUMENTS_DIR", documents_dir)
+
+    import storage.document_store as store_module
+
+    monkeypatch.setattr(
+        store_module,
+        "document_store",
+        store_module.DocumentStore(uploads_dir, documents_dir),
+    )
+    # api.documents imports `document_store` directly, so patch it there too.
+    import api.documents as documents_module
+
+    monkeypatch.setattr(documents_module, "document_store", store_module.document_store)
+
+    # services.document_service (Phase 2) also imports `document_store`
+    # directly, so it needs the same patch to see the isolated test storage.
+    import services.document_service as document_service_module
+
+    monkeypatch.setattr(
+        document_service_module, "document_store", store_module.document_store
+    )
+
+    import main as main_module
+
+    with TestClient(main_module.app) as test_client:
+        yield test_client
+
+
+@pytest.fixture()
+def sample_txt_bytes() -> bytes:
+    return "Hello Blind Spot AI.\nThis is a plain text test file.".encode("utf-8")
+
+
+@pytest.fixture()
+def sample_pdf_bytes() -> bytes:
+    import fitz
+
+    pdf = fitz.open()
+    for i in range(3):
+        page = pdf.new_page()
+        page.insert_text((72, 72), f"This is page {i + 1} of the test PDF document.")
+    buffer = io.BytesIO()
+    pdf.save(buffer)
+    pdf.close()
+    return buffer.getvalue()
+
+
+@pytest.fixture()
+def sample_scanned_pdf_bytes() -> bytes:
+    """A PDF with pages but no text layer, simulating a scanned document."""
+    import fitz
+
+    pdf = fitz.open()
+    pdf.new_page()
+    pdf.new_page()
+    buffer = io.BytesIO()
+    pdf.save(buffer)
+    pdf.close()
+    return buffer.getvalue()
+
+
+@pytest.fixture()
+def sample_docx_bytes() -> bytes:
+    document = DocxDocument()
+    document.add_heading("Test Document", level=1)
+    document.add_paragraph("This is the first paragraph.")
+    document.add_paragraph("This is the second paragraph.")
+
+    table = document.add_table(rows=2, cols=2)
+    table.cell(0, 0).text = "Header A"
+    table.cell(0, 1).text = "Header B"
+    table.cell(1, 0).text = "Value 1"
+    table.cell(1, 1).text = "Value 2"
+
+    buffer = io.BytesIO()
+    document.save(buffer)
+    return buffer.getvalue()
+
+
+@pytest.fixture()
+def sample_pptx_bytes() -> bytes:
+    presentation = Presentation()
+    slide_layout = presentation.slide_layouts[1]
+    slide = presentation.slides.add_slide(slide_layout)
+    slide.shapes.title.text = "Our Pitch"
+    body = slide.placeholders[1]
+    body.text_frame.text = "We solve a real problem."
+
+    slide2 = presentation.slides.add_slide(presentation.slide_layouts[1])
+    slide2.shapes.title.text = "Market"
+    slide2.placeholders[1].text_frame.text = "The market is huge."
+
+    buffer = io.BytesIO()
+    presentation.save(buffer)
+    return buffer.getvalue()
+
+
+@pytest.fixture()
+def sample_png_bytes() -> bytes:
+    image = Image.new("RGB", (1920, 1080), color=(120, 200, 80))
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+@pytest.fixture()
+def uploaded_txt_document_id(client, sample_txt_bytes) -> str:
+    """Upload a small TXT document and return its document_id."""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("pitch.txt", sample_txt_bytes, "text/plain")},
+    )
+    assert response.status_code == 200
+    return response.json()["document_id"]
+
+
+@pytest.fixture()
+def uploaded_png_document_id(client, sample_png_bytes) -> str:
+    """Upload a PNG (pending multimodal analysis) and return its document_id."""
+    response = client.post(
+        "/api/documents/upload",
+        files={"file": ("photo.png", sample_png_bytes, "image/png")},
+    )
+    assert response.status_code == 200
+    return response.json()["document_id"]

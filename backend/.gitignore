@@ -1,0 +1,23 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# Local data (uploaded files + generated normalized documents)
+data/uploads/*
+data/documents/*
+!data/uploads/.gitkeep
+!data/documents/.gitkeep
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
