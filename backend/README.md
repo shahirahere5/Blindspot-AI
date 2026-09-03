@@ -776,5 +776,327 @@ New Phase 3 test files:
 * No persistence of `DebateResult`s — each call to `/debate` re-runs the
   full seven-call pipeline; a document's debate report isn't cached or
   stored alongside its normalized JSON the way Phase 1's upload output is.
-* No frontend, auth, database, RAG, web search, voice input, image vision
-  analysis, or deployment — explicitly out of scope for this phase.
+* No frontend, auth, database, web search, voice input, image vision
+  analysis, or deployment — explicitly out of scope for this phase. RAG is
+  addressed in Phase 4 (see below).
+
+## Phase 4: Retrieval-Augmented Generation (RAG)
+
+Phase 4 adds an opt-in RAG pipeline: instead of sending an AI call the
+entire document's text, the document is split into small chunks, embedded,
+stored in a local vector index, and only the chunks most relevant to a
+given question are retrieved and shown to the model. This grounds every
+answer in the specific passages that back it up (rather than "the whole
+30-page deck"), reduces unsupported/fabricated claims, and lets `/analyze`
+and `/debate` scale to documents larger than `MAX_ANALYSIS_CONTENT_CHARS`
+without every AI call needing the full text.
+
+**RAG is off by default.** `RAG_ENABLED=false` (the default) means
+`/analyze` and `/debate` behave exactly as in Phase 2/3 — full document
+text, no chunking, no embeddings, no vector store touched at all. Every
+Phase 1-3 test continues to pass unmodified because of this: RAG is
+additive, never a replacement, unless explicitly turned on.
+
+### Why RAG, and why this design
+
+* **Chunking operates on Phase 1's own output.** `rag/chunking.py` splits
+  each `ContentBlock` (`schemas/document.py`, unchanged) that Phase 1
+  already extracted — a chunk's `source_location`/`source_type` are always
+  copied from a real block, so chunking can never invent a page or slide
+  number.
+* **Embeddings are free and fully local.** Groq (the project's only AI
+  provider) doesn't serve embeddings, and the brief explicitly rules out
+  Ollama/a local LLM. Rather than requiring a paid embedding API or a
+  multi-hundred-MB local model download (poor fit for "free resources" and
+  "easy local development"), the default embedding provider
+  (`ai/embeddings/hashing.py`) is a deterministic feature-hashing
+  (bag-of-words-style) embedding: pure Python standard library, no network
+  access, no model file, same vector for the same text on any machine. It's
+  not a state-of-the-art semantic embedding, but it's a solid, well-known
+  baseline for retrieval *within a single document's own chunks* — a much
+  easier task than open-domain search. The interface
+  (`ai/embeddings/base.py`) is provider-independent, so a real semantic
+  embedding model can be added later as a second implementation without
+  touching chunking, the vector store, or retrieval.
+* **The vector store is a simple local JSON store, not Chroma/a production
+  vector DB.** One JSON file per document under `RAG_VECTOR_STORE_PATH`
+  (mirroring `storage/document_store.py`'s one-file-per-document pattern),
+  brute-force cosine similarity in pure Python. A hackathon document rarely
+  has more than a few hundred chunks, so this is fast enough, has zero
+  extra runtime dependencies (no server process, no native build steps on
+  a judge's machine), and persists across restarts by construction.
+
+### Architecture
+
+```
+NormalizedDocument (Phase 1, unchanged)
+        ↓
+rag/chunking.py            → DocumentChunk per ContentBlock (word-aware split)
+        ↓
+ai/embeddings/*            → one vector per chunk (default: local hashing)
+        ↓
+storage/vector_store.py    → persisted, one JSON file per document_id
+        ↓
+services/retrieval_service.py   → index / similarity search, per document
+        ↓
+rag/context_builder.py     → renders retrieved chunks as "[Source: Page 2]\n..."
+        ↓
+services/rag_service.py    → ties it together: per-query RagContext(content, valid_locations, item_count)
+        ↓                                  ↓
+services/analysis_service.py    services/debate_service.py   (both: only when RAG_ENABLED)
+```
+
+New/changed files for Phase 4:
+
+```
+backend/
+├── rag/
+│   ├── chunking.py               # NEW: word-aware document chunker
+│   └── context_builder.py        # NEW: renders retrieved chunks into grounded text
+├── ai/
+│   └── embeddings/
+│       ├── base.py               # NEW: EmbeddingProvider interface + error types
+│       ├── hashing.py            # NEW: free, local, deterministic default provider
+│       └── factory.py            # NEW: get_embedding_provider()
+├── storage/
+│   └── vector_store.py           # NEW: SimpleVectorStore (local, JSON-persisted)
+├── schemas/
+│   └── rag.py                    # NEW: DocumentChunk, RetrievedChunk, index/retrieve API schemas
+├── services/
+│   ├── retrieval_service.py      # NEW: indexing + retrieval orchestration
+│   ├── rag_service.py            # NEW: RagContext + per-agent/analysis retrieval queries
+│   ├── analysis_service.py       # CHANGED: RAG branch added; non-RAG path untouched
+│   └── debate_service.py         # CHANGED: RAG branch added; non-RAG path untouched
+├── api/
+│   ├── rag.py                    # NEW: POST /index, POST /retrieve
+│   ├── analysis.py                # CHANGED: handles EmbeddingError/VectorStoreError
+│   └── debate.py                  # CHANGED: handles EmbeddingError/VectorStoreError
+├── main.py                       # CHANGED: registers the new rag router
+├── config.py                     # CHANGED: adds RAG_* settings
+└── tests/
+    ├── conftest.py                # CHANGED: isolates the vector store dir per test
+    ├── fakes.py                   # CHANGED: adds FakeEmbeddingProvider
+    ├── test_chunking.py           # NEW
+    ├── test_embeddings.py         # NEW
+    ├── test_vector_store.py       # NEW
+    ├── test_retrieval_service.py  # NEW
+    ├── test_rag_context.py        # NEW
+    ├── test_rag_api.py            # NEW
+    ├── test_analysis_rag_integration.py   # NEW
+    └── test_debate_rag_integration.py     # NEW
+```
+
+### Chunking
+
+`rag.chunking.chunk_document(document, chunk_size, chunk_overlap)` splits
+every non-empty `ContentBlock` independently, word-aware (never splits a
+word in half), with `RAG_CHUNK_OVERLAP` characters of trailing context
+repeated at the start of the next chunk. A block that already fits within
+`RAG_CHUNK_SIZE` is left as a single chunk. Every `DocumentChunk` carries
+`document_id`, `chunk_index` (sequential across the whole document),
+`text`, `source_type`, and `source_location` — the last two always copied
+from the real `ContentBlock`.
+
+### Embeddings
+
+`ai.embeddings.factory.get_embedding_provider()` reads
+`RAG_EMBEDDING_PROVIDER` (default, and only provider implemented today:
+`hashing`) and returns an `EmbeddingProvider`. **Local vs. external:** the
+hashing provider is 100% local — no network call, no API key, no model
+download. To add a real semantic embedding provider later (e.g. a hosted
+embedding API, or a local `sentence-transformers` model), implement
+`ai.embeddings.base.EmbeddingProvider` and register it in
+`ai/embeddings/factory.py`'s `_PROVIDERS` dict; nothing else in the
+pipeline needs to change.
+
+### Vector store
+
+`storage.vector_store.SimpleVectorStore` (singleton: `vector_store`)
+persists one JSON file per document under `RAG_VECTOR_STORE_PATH`
+(`backend/data/vector_store/` by default), containing every chunk's text,
+metadata, and embedding vector for that document. Re-indexing a document
+fully replaces its previous index (never partially updated), so a document
+can never end up with vectors from two different embedding providers/
+dimensions mixed together. Search is brute-force cosine similarity, scoped
+to a single `document_id` — there is no code path that can return another
+document's chunks. **Local vs. external:** entirely local filesystem
+storage, no server process, no external service.
+
+### Retrieval
+
+`services.retrieval_service` exposes:
+
+* `ensure_document_indexed(document, force=False)` — chunks + embeds +
+  stores a document if it isn't indexed yet (or unconditionally if
+  `force=True`, used for explicit re-indexing). Raises
+  `DocumentHasNoAnalyzableContentError` (reused from Phase 2 — same
+  meaning) if chunking produces zero chunks.
+* `retrieve_relevant_chunks(document_id, query, top_k=None)` — embeds the
+  query and returns the `top_k` (default `RAG_TOP_K`) most similar chunks
+  for that document. Raises `DocumentNotIndexedError` if the document
+  hasn't been indexed yet. Never retrieves chunks from any other document.
+
+`services.rag_service.build_context_from_query(document_id, query, top_k)`
+combines retrieval with `rag.context_builder.build_rag_context(...)` into
+a ready-to-use `RagContext(content, valid_locations, item_count)`.
+
+### RAG context format
+
+Retrieved chunks are rendered as:
+
+```
+[Source: Page 2]
+<chunk text>
+
+[Source: Slide 5]
+<chunk text>
+```
+
+`valid_locations` — used to cross-check the model's `source_locations`
+citations — is built *only* from the locations of chunks actually
+retrieved and shown to the model for that call, not every location in the
+document. This is deliberately stricter than Phase 2/3's full-document
+validation: if an agent was only shown pages 2 and 5, a citation to page 9
+is dropped even if page 9 genuinely exists elsewhere in the document,
+because the model was never shown it and could not have gotten that
+citation from real evidence.
+
+### Integration with `/analyze` and `/debate`
+
+When `RAG_ENABLED=true`:
+
+* **`/analyze`** auto-indexes the document (if not already indexed), then
+  retrieves chunks for one broad query covering everything the analyzer
+  reports on (risks, assumptions, biases, missing perspectives, questions,
+  recommendations), and sends only that grounded context to the model —
+  instead of the full document text.
+* **`/debate`** auto-indexes the document once, then retrieves a
+  *different* set of chunks for each of the six specialist agents, using
+  that agent's own perspective as the retrieval query (e.g. the Security
+  agent retrieves chunks about "data security, privacy, authentication,
+  ..."). This means each agent gets a smaller, more targeted prompt
+  grounded in the evidence most relevant to *its* angle, rather than every
+  agent sharing one large full-document prompt. The Moderator retrieves
+  separately using a broad, whole-document query (similar to `/analyze`'s),
+  so it has a synthesis-level view rather than any one agent's narrow
+  slice. The six-agent-plus-Moderator architecture itself is unchanged —
+  RAG only changes *what content* each participant is shown, never how
+  many agents run or how the debate is orchestrated.
+
+Both endpoints' JSON response shapes are **completely unchanged** by RAG —
+only where the prompt content came from differs internally. Both add one
+metadata field, `"rag_enabled": true/false`, so a response is self-
+describing about which mode produced it.
+
+When `RAG_ENABLED=false` (the default), neither endpoint imports or calls
+the embedding layer or vector store at all — verified directly by
+`test_analysis_rag_integration.py::test_analysis_without_rag_never_touches_embeddings`
+and the equivalent debate test, which monkeypatch the RAG entry point to
+raise if it's ever called and confirm the endpoint still succeeds normally.
+
+### API
+
+**`POST /api/documents/{document_id}/index`** — chunk, embed, and store a
+document (always re-indexes from scratch). Useful to pre-warm the index, or
+to force re-indexing after changing `RAG_EMBEDDING_PROVIDER` or chunk
+settings.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/documents/doc_.../index
+```
+
+```json
+{
+  "success": true,
+  "document_id": "doc_...",
+  "chunks_indexed": 12,
+  "embedding_provider": "hashing",
+  "embedding_dimension": 256
+}
+```
+
+**`POST /api/documents/{document_id}/retrieve`** — inspect what a
+RAG-enabled `/analyze` or `/debate` call would actually retrieve for a
+given query; auto-indexes the document first if needed. Mainly a debugging
+tool.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/documents/doc_.../retrieve \
+  -H "Content-Type: application/json" \
+  -d '{"query": "what are the financial risks?", "top_k": 3}'
+```
+
+```json
+{
+  "document_id": "doc_...",
+  "query": "what are the financial risks?",
+  "top_k": 3,
+  "results": [
+    {
+      "text": "...",
+      "score": 0.42,
+      "metadata": {"chunk_index": 4, "source_type": "page", "source_location": 2}
+    }
+  ]
+}
+```
+
+Error responses use the same `{"success": false, "error": ..., "detail": ...}`
+shape as every other endpoint: `404` (document not found), `400` (document
+not ready / not indexed / no analyzable content), `500` (embedding or
+vector-store failure, or an unsupported `RAG_EMBEDDING_PROVIDER`).
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `RAG_ENABLED` | `false` | Turn on RAG for `/analyze` and `/debate`. |
+| `RAG_CHUNK_SIZE` | `800` | Max characters per chunk (word-aware). |
+| `RAG_CHUNK_OVERLAP` | `150` | Characters of trailing context repeated between adjacent chunks. |
+| `RAG_TOP_K` | `5` | Default number of chunks retrieved per query. |
+| `RAG_EMBEDDING_PROVIDER` | `hashing` | Embedding provider name (`hashing` is the only one implemented today). |
+| `RAG_EMBEDDING_DIMENSION` | `256` | Vector size used by the hashing provider. |
+| `RAG_VECTOR_STORE_PATH` | `backend/data/vector_store` | Where per-document index JSON files are persisted. |
+
+### How to run it locally
+
+```bash
+cp .env.example .env   # set RAG_ENABLED=true to turn RAG on
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+No extra setup beyond the existing Phase 1-3 setup — the default embedding
+provider needs no API key, no model download, and no extra service to run.
+
+### How to test
+
+```bash
+pytest
+```
+
+All Phase 4 tests use `FakeEmbeddingProvider` (see `tests/fakes.py`) or the
+real, local, dependency-free `HashingEmbeddingProvider` directly — nothing
+in the suite calls a real embedding API, and (as in Phase 2/3) nothing
+calls the real Groq API either. New test files: `test_chunking.py`,
+`test_embeddings.py`, `test_vector_store.py`, `test_retrieval_service.py`,
+`test_rag_context.py`, `test_rag_api.py`,
+`test_analysis_rag_integration.py`, `test_debate_rag_integration.py`.
+
+### Known limitations / future improvements
+
+* The default hashing embedding is a free, local baseline, not a
+  state-of-the-art semantic embedding — retrieval quality would improve
+  with a real embedding model (the interface is ready for one; see
+  "Why RAG, and why this design" above).
+* Retrieval is currently one query per analyzer/agent/moderator per call —
+  there's no multi-query or iterative retrieval.
+* No incremental re-indexing — any re-index fully replaces a document's
+  previous chunks/vectors rather than diffing.
+* No cross-document retrieval by design (each document's index is fully
+  isolated) — there's no "search across all my documents" capability, nor
+  is one planned, since Blind Spot AI analyzes one decision document at a
+  time.
+* The vector store's brute-force search is `O(chunks)` per query, which is
+  fine at hackathon/document scale but would need a real ANN index (or a
+  production vector database) at a much larger scale.

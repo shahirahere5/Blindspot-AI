@@ -57,7 +57,12 @@ from schemas.debate import (
     DebateStatus,
     ModeratorOutput,
 )
-from services.document_service import prepare_document_for_analysis
+from services import rag_service
+from services.document_service import (
+    ensure_document_is_analyzable,
+    get_document_or_raise,
+    prepare_document_for_analysis,
+)
 
 logger = logging.getLogger("blindspot.debate")
 
@@ -195,26 +200,70 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
     turned into a valid DebateResult. Raises ai.base.AIClientError subclasses
     untouched if the Moderator call itself fails (connection, timeout,
     missing model, etc) -- a partial result is never fabricated in that case.
-    """
-    document, labeled_content, valid_locations, content_item_count = (
-        prepare_document_for_analysis(document_id)
-    )
 
+    When config.RAG_ENABLED is true, each specialist agent is grounded in
+    chunks retrieved using its *own* perspective as the query (so, e.g.,
+    the Security agent only sees chunks most relevant to security), and the
+    Moderator is grounded in a broader, whole-document retrieval -- instead
+    of every agent and the Moderator sharing one full-document prompt. When
+    false (the default), this is byte-for-byte the same shared-content
+    behavior as before RAG existed.
+    """
     semaphore = asyncio.Semaphore(max(1, config.DEBATE_MAX_CONCURRENT_AGENTS))
 
-    agent_analyses = await asyncio.gather(
-        *[
-            _run_single_agent(
-                agent,
-                ai_client,
-                labeled_content,
-                content_item_count,
-                valid_locations,
-                semaphore,
+    if config.RAG_ENABLED:
+        document = get_document_or_raise(document_id)
+        ensure_document_is_analyzable(document)
+        rag_service.ensure_document_indexed(document)
+
+        agent_rag_contexts: dict[AgentRole, rag_service.RagContext] = {
+            agent: rag_service.build_context_from_query(
+                document_id, rag_service.get_agent_retrieval_query(agent)
             )
             for agent in AGENT_ROLES
-        ]
-    )
+        }
+        moderator_rag_context = rag_service.build_context_from_query(
+            document_id, rag_service.MODERATOR_RETRIEVAL_QUERY
+        )
+
+        agent_analyses = await asyncio.gather(
+            *[
+                _run_single_agent(
+                    agent,
+                    ai_client,
+                    agent_rag_contexts[agent].content,
+                    agent_rag_contexts[agent].item_count,
+                    agent_rag_contexts[agent].valid_locations,
+                    semaphore,
+                )
+                for agent in AGENT_ROLES
+            ]
+        )
+        moderator_labeled_content = moderator_rag_context.content
+        moderator_content_item_count = moderator_rag_context.item_count
+        moderator_valid_locations = moderator_rag_context.valid_locations
+    else:
+        _, labeled_content, valid_locations, content_item_count = (
+            prepare_document_for_analysis(document_id)
+        )
+
+        agent_analyses = await asyncio.gather(
+            *[
+                _run_single_agent(
+                    agent,
+                    ai_client,
+                    labeled_content,
+                    content_item_count,
+                    valid_locations,
+                    semaphore,
+                )
+                for agent in AGENT_ROLES
+            ]
+        )
+        moderator_labeled_content = labeled_content
+        moderator_content_item_count = content_item_count
+        moderator_valid_locations = valid_locations
+
     agent_analyses = list(agent_analyses)
 
     successful = [a for a in agent_analyses if a.status == AgentStatus.SUCCEEDED]
@@ -228,7 +277,10 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
 
     failed_agent_names = [get_agent_title(a.agent) for a in failed]
     moderator_user_prompt = build_moderator_user_prompt(
-        labeled_content, content_item_count, successful, failed_agent_names
+        moderator_labeled_content,
+        moderator_content_item_count,
+        successful,
+        failed_agent_names,
     )
 
     # Let AIClientError subclasses propagate untouched -- the API layer maps
@@ -261,9 +313,11 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
             "Please try again."
         ) from exc
 
-    _filter_source_locations(moderator_output.final_risks, valid_locations)
-    _filter_source_locations(moderator_output.final_assumptions, valid_locations)
-    _filter_source_locations(moderator_output.final_biases, valid_locations)
+    _filter_source_locations(moderator_output.final_risks, moderator_valid_locations)
+    _filter_source_locations(
+        moderator_output.final_assumptions, moderator_valid_locations
+    )
+    _filter_source_locations(moderator_output.final_biases, moderator_valid_locations)
 
     return DebateResult(
         document_id=document_id,
@@ -284,6 +338,7 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
             "agents_used": len(AGENT_ROLES),
             "agents_succeeded": [a.agent.value for a in successful],
             "agents_failed": [a.agent.value for a in failed],
-            "analyzed_content_items": content_item_count,
+            "analyzed_content_items": moderator_content_item_count,
+            "rag_enabled": config.RAG_ENABLED,
         },
     )

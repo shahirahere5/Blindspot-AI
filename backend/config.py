@@ -106,6 +106,14 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    """Read a boolean environment variable (1/true/yes/on, case-insensitive)."""
+    raw_value = os.environ.get(name)
+    if raw_value is None or not raw_value.strip():
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: AI analysis configuration
 # ---------------------------------------------------------------------------
@@ -143,3 +151,41 @@ MAX_ANALYSIS_CONTENT_CHARS = _env_int("MAX_ANALYSIS_CONTENT_CHARS", 20_000)
 # only six), but can be lowered via the environment if rate limiting becomes
 # an issue on a given Groq account.
 DEBATE_MAX_CONCURRENT_AGENTS = _env_int("DEBATE_MAX_CONCURRENT_AGENTS", 6)
+
+# ---------------------------------------------------------------------------
+# Phase 4: Retrieval-Augmented Generation (RAG) configuration
+# ---------------------------------------------------------------------------
+# RAG is opt-in and defaults to OFF so Phase 1-3 behavior (and every
+# Phase 1-3 test) is completely unaffected unless a deployment explicitly
+# enables it. When disabled, /analyze and /debate build their prompts
+# exactly as before (the full labeled document content, unchanged).
+RAG_ENABLED = _env_bool("RAG_ENABLED", False)
+
+# Chunking: character-based chunk size and overlap. Chunking is word-aware
+# (never splits mid-word) but these limits are expressed in characters,
+# since that's what MAX_ANALYSIS_CONTENT_CHARS is already expressed in.
+RAG_CHUNK_SIZE = _env_int("RAG_CHUNK_SIZE", 800)
+RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 150)
+
+# Retrieval: how many chunks to retrieve per query by default.
+RAG_TOP_K = _env_int("RAG_TOP_K", 5)
+
+# Embedding provider. "hashing" is the only provider implemented today: a
+# free, fully local, dependency-free, deterministic feature-hashing
+# embedding (see ai/embeddings/hashing.py for why this was chosen over
+# requiring a paid embedding API or a heavy local model download). The
+# interface (ai/embeddings/base.py) is provider-independent so a real
+# semantic embedding model can be dropped in later without touching any
+# other Phase 4 code.
+RAG_EMBEDDING_PROVIDER = _env_str("RAG_EMBEDDING_PROVIDER", "hashing")
+
+# Vector dimensionality used by the hashing embedding provider. Only
+# relevant when RAG_EMBEDDING_PROVIDER=hashing.
+RAG_EMBEDDING_DIMENSION = _env_int("RAG_EMBEDDING_DIMENSION", 256)
+
+# Where the local vector store persists its per-document index files
+# between application restarts.
+RAG_VECTOR_STORE_PATH = Path(
+    _env_str("RAG_VECTOR_STORE_PATH", str(DATA_DIR / "vector_store"))
+)
+RAG_VECTOR_STORE_PATH.mkdir(parents=True, exist_ok=True)

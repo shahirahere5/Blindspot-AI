@@ -22,13 +22,16 @@ def client(tmp_path, monkeypatch):
     """
     uploads_dir = tmp_path / "uploads"
     documents_dir = tmp_path / "documents"
+    vector_store_dir = tmp_path / "vector_store"
     uploads_dir.mkdir()
     documents_dir.mkdir()
+    vector_store_dir.mkdir()
 
     import config
 
     monkeypatch.setattr(config, "UPLOADS_DIR", uploads_dir)
     monkeypatch.setattr(config, "DOCUMENTS_DIR", documents_dir)
+    monkeypatch.setattr(config, "RAG_VECTOR_STORE_PATH", vector_store_dir)
 
     import storage.document_store as store_module
 
@@ -48,6 +51,19 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(
         document_service_module, "document_store", store_module.document_store
+    )
+
+    # Phase 4: isolate the local vector store the same way, and patch every
+    # module that imports the singleton directly (services.retrieval_service).
+    import storage.vector_store as vector_store_module
+
+    isolated_vector_store = vector_store_module.SimpleVectorStore(vector_store_dir)
+    monkeypatch.setattr(vector_store_module, "vector_store", isolated_vector_store)
+
+    import services.retrieval_service as retrieval_service_module
+
+    monkeypatch.setattr(
+        retrieval_service_module, "vector_store", isolated_vector_store
     )
 
     import main as main_module

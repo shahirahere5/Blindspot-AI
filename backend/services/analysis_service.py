@@ -15,12 +15,18 @@ from __future__ import annotations
 
 import logging
 
+import config
 from ai.base import AIClient, AIClientError
 from ai.json_utils import JSONExtractionError, extract_json_object
 from ai.prompts import SYSTEM_PROMPT, build_user_prompt
 from pydantic import ValidationError as PydanticValidationError
 from schemas.analysis import AnalysisReport, AnalysisStatus
-from services.document_service import prepare_document_for_analysis
+from services import rag_service
+from services.document_service import (
+    ensure_document_is_analyzable,
+    get_document_or_raise,
+    prepare_document_for_analysis,
+)
 
 logger = logging.getLogger("blindspot.analysis")
 
@@ -68,10 +74,27 @@ async def analyze_document(document_id: str, ai_client: AIClient) -> AnalysisRep
     Raises AnalysisGenerationError if the AI response cannot be turned into
     a valid AnalysisReport. Raises ai.base.AIClientError subclasses if the
     AI backend itself fails (connection, timeout, missing model, etc).
+
+    When config.RAG_ENABLED is true, retrieves and grounds the prompt in
+    only the most relevant indexed chunks (auto-indexing the document on
+    first use) instead of sending the full document text -- see
+    services/rag_service.py. When false (the default), this is byte-for-
+    byte the same full-document behavior as Phase 2.
     """
-    document, labeled_content, valid_locations, content_item_count = (
-        prepare_document_for_analysis(document_id)
-    )
+    if config.RAG_ENABLED:
+        document = get_document_or_raise(document_id)
+        ensure_document_is_analyzable(document)
+        rag_service.ensure_document_indexed(document)
+        rag_context = rag_service.build_context_from_query(
+            document_id, rag_service.ANALYSIS_RETRIEVAL_QUERY
+        )
+        labeled_content = rag_context.content
+        valid_locations = rag_context.valid_locations
+        content_item_count = rag_context.item_count
+    else:
+        _, labeled_content, valid_locations, content_item_count = (
+            prepare_document_for_analysis(document_id)
+        )
 
     user_prompt = build_user_prompt(labeled_content, content_item_count)
 
@@ -97,6 +120,7 @@ async def analyze_document(document_id: str, ai_client: AIClient) -> AnalysisRep
         **(parsed_json.get("metadata") or {}),
         "model": ai_client.model_name,
         "analyzed_content_items": content_item_count,
+        "rag_enabled": config.RAG_ENABLED,
     }
 
     try:

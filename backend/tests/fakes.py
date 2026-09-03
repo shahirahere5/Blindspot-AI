@@ -284,3 +284,44 @@ MALFORMED_AGENT_SCHEMA_JSON = """{
   "summary": "ok",
   "findings": "this should be a list, not a string"
 }"""
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: RAG embedding fakes
+# ---------------------------------------------------------------------------
+from ai.embeddings.base import EmbeddingGenerationError, EmbeddingProvider
+
+
+class FakeEmbeddingProvider(EmbeddingProvider):
+    """A controllable embedding provider for unit tests: returns exact,
+    pre-assigned vectors for known texts (so similarity ranking in a test
+    is fully predictable), or raises EmbeddingGenerationError on demand."""
+
+    def __init__(
+        self,
+        dimension: int = 4,
+        vectors: dict[str, list[float]] | None = None,
+        default_vector: list[float] | None = None,
+        fail: bool = False,
+    ) -> None:
+        self._dimension = dimension
+        self._vectors = vectors or {}
+        self._default_vector = default_vector or [0.0] * dimension
+        self._fail = fail
+        self.calls: list[list[str]] = []
+
+    @property
+    def dimension(self) -> int:
+        return self._dimension
+
+    @property
+    def provider_name(self) -> str:
+        return "fake"
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.calls.append(list(texts))
+        if self._fail:
+            raise EmbeddingGenerationError("Simulated embedding failure.")
+        if not texts:
+            return []
+        return [self._vectors.get(text, self._default_vector) for text in texts]

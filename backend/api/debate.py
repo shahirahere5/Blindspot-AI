@@ -17,6 +17,7 @@ from ai.base import (
     AITimeoutError,
 )
 from ai.client import get_ai_client
+from ai.embeddings.base import EmbeddingError
 from schemas.debate import DebateErrorResponse, DebateResult
 from services.debate_service import (
     DebateAllAgentsFailedError,
@@ -29,6 +30,8 @@ from services.document_service import (
     DocumentNotReadyError,
     DocumentTooLargeForAnalysisError,
 )
+from services.retrieval_service import DocumentNotIndexedError
+from storage.vector_store import VectorStoreError
 
 logger = logging.getLogger("blindspot.debate_api")
 
@@ -74,6 +77,14 @@ async def debate_document_endpoint(document_id: str) -> DebateResult:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except DocumentTooLargeForAnalysisError as exc:
         raise HTTPException(status_code=413, detail=exc.message) from exc
+    except DocumentNotIndexedError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except EmbeddingError as exc:
+        logger.error("Embedding error debating %s: %s", document_id, exc.message)
+        raise HTTPException(status_code=500, detail=exc.message) from exc
+    except VectorStoreError as exc:
+        logger.error("Vector store error debating %s: %s", document_id, exc.message)
+        raise HTTPException(status_code=500, detail=exc.message) from exc
     except AIConfigurationError as exc:
         # A missing/invalid server-side configuration (e.g. no GROQ_API_KEY)
         # is not the caller's fault -- surfaced as a 500, not a 4xx.
