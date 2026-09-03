@@ -31,16 +31,23 @@ from ai.base import (
 
 
 class GroqClient(AIClient):
+    # Sentinel distinguishing "api_key not passed at all" (fall back to
+    # config.GROQ_API_KEY, as `get_ai_client()` relies on for real usage)
+    # from "api_key explicitly passed as None" (means no key, full stop --
+    # must never silently fall back to whatever happens to be in the
+    # environment/.env at runtime, e.g. during tests).
+    _UNSET = object()
+
     def __init__(
         self,
-        api_key: str | None = None,
+        api_key: str | None = _UNSET,  # type: ignore[assignment]
         base_url: str | None = None,
         model: str | None = None,
         request_timeout_seconds: float | None = None,
         connect_timeout_seconds: float | None = None,
         temperature: float | None = None,
     ) -> None:
-        self.api_key = api_key if api_key is not None else config.GROQ_API_KEY
+        self.api_key = config.GROQ_API_KEY if api_key is self._UNSET else api_key
         self.base_url = (base_url or config.GROQ_BASE_URL).rstrip("/")
         self.model = model or config.GROQ_MODEL
         self.request_timeout_seconds = (

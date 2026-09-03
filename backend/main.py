@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from api.analysis import router as analysis_router
+from api.debate import router as debate_router
 from api.documents import router as documents_router
 
 logging.basicConfig(
@@ -34,6 +35,7 @@ app = FastAPI(
 
 app.include_router(documents_router)
 app.include_router(analysis_router)
+app.include_router(debate_router)
 
 
 @app.exception_handler(Exception)

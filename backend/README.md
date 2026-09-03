@@ -447,12 +447,334 @@ If you see a `500` with a message about `GROQ_API_KEY`, double check your
 it). If you see a `502` mentioning an invalid API key, regenerate your key
 at [console.groq.com/keys](https://console.groq.com/keys).
 
-## Phase 3 Preview
+## Phase 3: Multi-Agent Debate Engine
 
-Phase 3 will replace the single analyzer call in
-`services/analysis_service.py` with multiple specialist agents (Optimist,
-Skeptic, Financial, Security, Ethics, Legal) plus a moderator that
-synthesizes their findings — without needing to change `ai/client.py`,
-`ai/json_utils.py`, `services/document_service.py`, or anything in Phase 1.
-Later phases will add RAG/embeddings for large-document handling in place
-of today's simple character-limit safeguard.
+Phase 3 replaces the single-pass analysis of Phase 2 with a genuine
+**multi-agent debate**: six independent specialist agents each analyze the
+*same* document from their own narrow perspective, without seeing each
+other's output, and a seventh **Moderator** agent synthesizes their
+findings into one unified report.
+
+Phase 1 and Phase 2 are completely unchanged and untouched by Phase 3.
+`POST /api/documents/upload`, `GET /api/documents/{id}`, and
+`POST /api/documents/{id}/analyze` continue to work exactly as before.
+
+### Multi-agent architecture
+
+```
+NormalizedDocument (Phase 1)
+        ↓
+services/document_service.py     → validates + builds labeled content (unchanged, reused)
+        ↓
+        ├── Optimist Agent   ─┐
+        ├── Skeptic Agent    │
+        ├── Security Agent   ├─  run independently & concurrently
+        ├── Financial Agent  │   (each gets the same document content,
+        ├── Ethics Agent     │    none sees another agent's output)
+        └── Legal Agent     ─┘
+        ↓
+services/debate_service.py       → collects agent results (successes + failures)
+        ↓
+Moderator Agent                  → compares, deduplicates, ranks, synthesizes
+        ↓
+schemas/debate.py                → validates the final DebateResult
+```
+
+The **agents are independent AI perspectives, not separate trained
+models** — all seven (six specialists + Moderator) call the exact same
+underlying Groq model (`ai/client.py`'s `GroqClient`, unmodified), each
+with its own system prompt and role defined in `ai/debate_prompts.py`.
+Nothing about the AI transport layer, JSON-safety utilities
+(`ai/json_utils.py`), or the document pipeline changed for Phase 3.
+
+New/changed files for Phase 3:
+
+```
+backend/
+├── ai/
+│   └── debate_prompts.py         # NEW: per-agent + moderator system/user prompts
+├── schemas/
+│   └── debate.py                 # NEW: AgentFinding, AgentAnalysis, DebateResult, etc.
+├── services/
+│   └── debate_service.py         # NEW: orchestrates agents + moderator
+├── api/
+│   └── debate.py                 # NEW: POST /api/documents/{id}/debate
+├── main.py                       # CHANGED: registers the new debate router
+├── config.py                     # CHANGED: adds DEBATE_MAX_CONCURRENT_AGENTS
+└── tests/
+    ├── fakes.py                  # CHANGED: adds DebateFakeAIClient + canned JSON
+    ├── test_debate_agents.py     # NEW: per-agent unit tests
+    ├── test_debate_service.py    # NEW: orchestration/service tests
+    └── test_debate_api.py        # NEW: endpoint tests
+```
+
+### Agent descriptions
+
+| Agent | Perspective |
+|---|---|
+| **Optimist** | Strengths, opportunities, well-supported positive assumptions, feasible aspects — but still flags real weaknesses when they matter. |
+| **Skeptic** | Weak assumptions, unsupported claims, contradictions, missing evidence, failure scenarios, technical feasibility, overconfidence, hidden dependencies. |
+| **Security** | Data security, privacy, auth, data leakage, prompt injection, malicious inputs, system abuse, AI/infrastructure security. Explains when security is genuinely not applicable rather than inventing risks. |
+| **Financial** | Cost assumptions, revenue model, pricing, ROI, market viability, operational/scalability costs, monetization assumptions. Never invents numbers; distinguishes stated vs. missing financial information. |
+| **Ethics** | Fairness, bias, discrimination risk, human impact, misuse potential, transparency, accountability, overreliance on AI. Never makes unsupported accusations. |
+| **Legal** | Legal/regulatory risk, privacy requirements, IP, liability, compliance, consent. Explicitly states it is not providing legal advice and that a qualified professional should review flagged issues. |
+| **Moderator** | Compares all six perspectives, identifies agreements/disagreements, deduplicates, resolves contradictions where possible, ranks the most important risks, preserves a well-justified single-agent finding even if uncorroborated, and produces the final unified report. |
+
+### `POST /api/documents/{document_id}/debate`
+
+Runs the full multi-agent debate over a previously uploaded and processed
+document.
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/documents/doc_550e8400-e29b-41d4-a716-446655440000/debate
+```
+
+**Successful response (`200`):**
+
+```json
+{
+  "document_id": "doc_550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "agent_analyses": [
+    {
+      "agent": "optimist",
+      "role": "Optimist Agent",
+      "status": "succeeded",
+      "error": null,
+      "summary": "The proposal has real strengths...",
+      "findings": [ /* AgentFinding: title, description, severity, evidence, source_locations, recommendation */ ],
+      "assumptions": [ /* Assumption */ ],
+      "questions": [ /* UnansweredQuestion */ ],
+      "confidence": "medium",
+      "metadata": {}
+    }
+    /* ... skeptic, security, financial, ethics, legal ... */
+  ],
+  "agreements": ["Multiple agents noted the proposal lacks supporting detail."],
+  "disagreements": ["The Optimist sees the growth plan as a strength while the Skeptic sees it as unsupported."],
+  "final_blind_spots": ["No agent found evidence of a validated customer base."],
+  "final_risks": [ /* Risk, same shape as Phase 2 */ ],
+  "final_assumptions": [ /* Assumption */ ],
+  "final_biases": [ /* Bias */ ],
+  "missing_perspectives": [ /* MissingPerspective */ ],
+  "unanswered_questions": [ /* UnansweredQuestion */ ],
+  "recommendations": [ /* Recommendation */ ],
+  "overall_assessment": "The proposal is promising but leaves several important questions unanswered.",
+  "metadata": {
+    "model": "openai/gpt-oss-120b",
+    "agents_used": 6,
+    "agents_succeeded": ["optimist", "skeptic", "security", "financial", "ethics", "legal"],
+    "agents_failed": [],
+    "analyzed_content_items": 5
+  }
+}
+```
+
+Note that `final_risks`, `final_assumptions`, `final_biases`,
+`missing_perspectives`, `unanswered_questions`, and `recommendations` use
+the **exact same shapes** as Phase 2's `AnalysisReport` (`schemas/analysis.py`
+is reused directly), so a frontend that already renders a Phase 2 report can
+render the Phase 3 `DebateResult`'s synthesized fields with no changes —
+`agent_analyses` is the only genuinely new structure to render.
+
+**Error responses:** the same status codes as `/analyze`, plus two new
+Phase-3-specific cases:
+
+| Status | Meaning |
+|---|---|
+| `404` | Document does not exist. |
+| `400` | Document isn't ready to analyze (same conditions as `/analyze`). |
+| `413` | Document's extracted text exceeds `MAX_ANALYSIS_CONTENT_CHARS`. |
+| `422` | The Moderator's output couldn't be parsed into valid JSON or didn't match the expected schema. |
+| `429` | Groq's rate limit was reached (from the Moderator call; individual agent rate limits are absorbed as agent failures, see below). |
+| `500` | `GROQ_API_KEY` is missing (server misconfiguration). |
+| `502` | Groq rejected the API key/model, is unreachable, or returned an invalid response for the **Moderator** call — **or** every one of the six specialist agents failed, leaving nothing to moderate. |
+| `504` | Groq didn't respond within the configured timeout (Moderator call). |
+
+Every error returns a JSON body with a `detail` field — no raw stack traces
+are ever returned to the client, same as Phase 1/2.
+
+### Agent failure handling
+
+A single specialist agent failing (AI error, malformed JSON, schema
+validation failure) does **not** fail the whole debate. Each agent's result
+in `agent_analyses` carries its own `status` (`"succeeded"` / `"failed"`)
+and, on failure, an `error` message. The response's top-level `metadata`
+also lists `agents_succeeded` and `agents_failed` for convenience:
+
+```json
+{
+  "agent": "financial",
+  "role": "Financial Agent",
+  "status": "failed",
+  "error": "The Groq API rate limit was reached...",
+  "summary": "",
+  "findings": [],
+  "assumptions": [],
+  "questions": [],
+  "confidence": "medium",
+  "metadata": {}
+}
+```
+
+The Moderator is explicitly told which agents failed and is instructed not
+to pretend that perspective was covered. If **every** agent fails, there is
+nothing meaningful to moderate, so the endpoint returns a `502` instead of
+fabricating a report. If the **Moderator itself** fails (AI error,
+unparseable output, schema mismatch), the endpoint returns a clear error
+(`502`/`504`/`422` as appropriate) rather than returning a partial or
+fabricated final result — a `200` response always means the Moderator
+successfully produced a real synthesis.
+
+### Independent analysis & concurrency
+
+Each of the six agents receives the document's labeled content
+independently, built once per debate and reused unchanged across all seven
+AI calls (six agents + Moderator) — no agent ever sees another agent's
+output, only the Moderator does. The six agents run **concurrently** via
+`asyncio.gather`, bounded by a semaphore (`DEBATE_MAX_CONCURRENT_AGENTS`,
+default 6 — i.e. unbounded in practice since there are only six agents, but
+lowerable via the environment if a given Groq account's rate limit needs
+tighter throttling). The Moderator always runs strictly after all six agent
+calls have completed (successfully or not).
+
+### Source locations
+
+Preserved exactly as in Phase 2: every agent finding and the Moderator's
+final findings cite `source_locations` referencing the same `[PAGE N]` /
+`[SLIDE N]` / `[PARAGRAPH N]` / `[TABLE N]` / `[TEXT N]` markers. The server
+cross-checks every returned location (from every agent, and from the
+Moderator) against locations that actually exist in the document and
+silently drops any that don't — the same safeguard Phase 2 uses, applied
+per-agent and again on the Moderator's synthesized output.
+
+### Environment variables
+
+Phase 3 reuses every Phase 2 Groq environment variable unchanged (see the
+table above) and adds one:
+
+| Variable | Default | Description |
+|---|---|---|
+| `DEBATE_MAX_CONCURRENT_AGENTS` | `6` | Maximum number of the six specialist agents allowed to call Groq concurrently. Lower this if you hit rate limits on a free-tier Groq account. |
+
+### How to run
+
+Same as Phase 1/2 — from the `backend/` directory:
+
+```bash
+cp .env.example .env   # fill in GROQ_API_KEY for real debate runs
+pip install -r requirements.txt
+uvicorn main:app --reload
+```
+
+### Manually testing via Swagger
+
+1. Start the server: `uvicorn main:app --reload`.
+2. Open `http://127.0.0.1:8000/docs`.
+3. Upload a document via `POST /api/documents/upload` and copy its
+   `document_id`.
+4. Call `POST /api/documents/{document_id}/debate` with that ID (leave the
+   request body empty — the endpoint takes no payload, just the path
+   parameter).
+5. Inspect the response: `agent_analyses` should contain six entries
+   (`optimist`, `skeptic`, `security`, `financial`, `ethics`, `legal`), each
+   `status: "succeeded"` under normal conditions, followed by the
+   Moderator-synthesized `final_risks`, `final_assumptions`,
+   `agreements`/`disagreements`, and `overall_assessment`.
+
+Example curl flow (same pattern as Phase 2's real end-to-end test):
+
+```bash
+DOC_ID=$(curl -s -X POST http://127.0.0.1:8000/api/documents/upload \
+  -F "file=@sample.pdf" | python3 -c "import sys,json;print(json.load(sys.stdin)['document_id'])")
+
+echo "Uploaded as $DOC_ID"
+
+curl -X POST http://127.0.0.1:8000/api/documents/$DOC_ID/debate
+```
+
+### How to test
+
+```bash
+pytest
+```
+
+The full suite (Phase 1 + Phase 2 + Phase 3) never calls the real Groq API
+— `tests/fakes.py`'s `DebateFakeAIClient` routes canned per-agent and
+per-moderator JSON responses (or canned `AIClientError`s) by inspecting
+which role's system prompt was used, since the six agents run concurrently
+and call order can't be relied on. No test consumes Groq API credits.
+
+New Phase 3 test files:
+
+* `tests/test_debate_agents.py` — each agent's title/role/prompt is
+  correct and distinct; valid responses parse; malformed JSON, schema
+  validation failures, and AI client errors are all handled per-agent
+  without raising.
+* `tests/test_debate_service.py` — all six agents execute and the
+  Moderator receives their results; one failed agent doesn't fail the
+  debate; all agents failing raises a clear error before the Moderator is
+  ever called; Moderator AI failures propagate untouched; Moderator
+  JSON/schema failures raise a clear generation error; fabricated source
+  locations (from an agent or the Moderator) are filtered; a missing
+  document raises the same `DocumentNotFoundError` as Phase 2.
+* `tests/test_debate_api.py` — `POST /api/documents/{id}/debate` end to
+  end: `200` success, `404` missing document, `400` not-ready document,
+  `413` oversized document, one-agent-failure still returns `200` with the
+  failure recorded, all-agents-failing returns `502`, and the Moderator's
+  own connection/timeout/config/auth/model/JSON/schema failures map to the
+  same status codes Phase 2 uses for `/analyze`.
+
+### Architectural decisions
+
+* **Reuse over rebuild.** `services/document_service.py`, `ai/client.py`,
+  and `ai/json_utils.py` are completely unmodified. Phase 3 only adds new
+  modules (`ai/debate_prompts.py`, `schemas/debate.py`,
+  `services/debate_service.py`, `api/debate.py`) plus two small additive
+  changes (`main.py` router registration, one new `config.py` setting).
+* **Schema reuse for the synthesized output.** `DebateResult`'s
+  `final_risks`/`final_assumptions`/`final_biases`/`missing_perspectives`/
+  `unanswered_questions`/`recommendations` reuse the exact Phase 2 Pydantic
+  models (`Risk`, `Assumption`, `Bias`, ...) rather than parallel Phase-3
+  versions, so validation/normalization logic (including
+  `source_locations` coercion) isn't duplicated and a frontend already
+  built for Phase 2 mostly works unchanged for these fields.
+  `AgentFinding` (used only inside `agent_analyses`) is a distinct, simpler
+  model since per-agent findings aren't quite the same concept as a
+  finalized `Risk`.
+  A separate `ModeratorOutput` model is used purely to validate the
+  Moderator's raw JSON before it's merged with the already-validated agent
+  analyses into the final `DebateResult` — it's not returned to clients.
+* **Agents never raise.** `_run_single_agent` catches every failure mode
+  (AI transport, JSON extraction, schema validation, and anything
+  unexpected) and always returns an `AgentAnalysis`, with `status="failed"`
+  and an `error` message on failure. This is what makes "one agent
+  failing doesn't fail the debate" trivial at the orchestration level —
+  `asyncio.gather` never sees an exception from an individual agent.
+* **The Moderator is the one call allowed to fail loudly.** Unlike the
+  agents, the Moderator's `ai_client.generate()` call is *not* wrapped in a
+  blanket try/except in `debate_service.py` — `AIClientError` subclasses
+  propagate untouched to the API layer, exactly like Phase 2's single
+  analyzer call, so a real upstream failure produces a real `502`/`504`/etc
+  instead of a silently degraded report.
+* **Bounded concurrency via a semaphore**, not raw `asyncio.gather` with no
+  limit, per the "respect Groq rate limits" requirement — even though the
+  default lets all six run at once (there are only six), the mechanism is
+  in place and configurable without any code changes.
+
+### Known limitations
+
+* No chunking/RAG yet — large documents still hit the same
+  `MAX_ANALYSIS_CONTENT_CHARS` ceiling as Phase 2 (a `413`), just now
+  checked once before fanning out to all seven AI calls instead of one.
+* All seven roles (six agents + Moderator) call the same configured Groq
+  model; Phase 3 does not support assigning different models per agent.
+* The Moderator sees each successful agent's structured output rendered as
+  plain text (not raw JSON) to keep its prompt compact and cheap on a
+  free-tier Groq account; it does not receive the failed agents' partial/
+  raw output, only their names.
+* No persistence of `DebateResult`s — each call to `/debate` re-runs the
+  full seven-call pipeline; a document's debate report isn't cached or
+  stored alongside its normalized JSON the way Phase 1's upload output is.
+* No frontend, auth, database, RAG, web search, voice input, image vision
+  analysis, or deployment — explicitly out of scope for this phase.

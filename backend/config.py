@@ -133,3 +133,13 @@ GROQ_TEMPERATURE = _env_float("GROQ_TEMPERATURE", 0.2)
 # single analysis pass. This is a simple, configurable safeguard against
 # unbounded context for large documents (no chunking/RAG in Phase 2).
 MAX_ANALYSIS_CONTENT_CHARS = _env_int("MAX_ANALYSIS_CONTENT_CHARS", 20_000)
+
+# ---------------------------------------------------------------------------
+# Phase 3: multi-agent debate engine configuration
+# ---------------------------------------------------------------------------
+# The six specialist agents run concurrently, but concurrency is bounded by
+# a semaphore rather than left uncontrolled, out of consideration for
+# free-tier Groq rate limits. Defaults to running all six at once (there are
+# only six), but can be lowered via the environment if rate limiting becomes
+# an issue on a given Groq account.
+DEBATE_MAX_CONCURRENT_AGENTS = _env_int("DEBATE_MAX_CONCURRENT_AGENTS", 6)
