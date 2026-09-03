@@ -50,9 +50,6 @@ def _filter_source_locations(report: AnalysisReport, valid_locations: set[int]) 
     best-effort safeguard against the model fabricating a location -- it
     never adds locations, it only ever removes invalid ones.
     """
-    if not valid_locations:
-        return
-
     for collection in (report.risks, report.assumptions, report.biases):
         for item in collection:
             item.source_locations = [

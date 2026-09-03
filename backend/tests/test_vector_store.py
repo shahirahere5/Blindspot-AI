@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from schemas.rag import DocumentChunk
 from storage.vector_store import SimpleVectorStore, VectorStoreError
+from storage.path_safety import InvalidDocumentIdError
 
 
 def _chunk(document_id: str, index: int, text: str, location: int = 1) -> DocumentChunk:
@@ -159,3 +162,33 @@ def test_chunk_count(tmp_path):
     )
 
     assert store.chunk_count("doc_a") == 2
+
+
+def test_index_rejects_chunk_from_another_document(tmp_path):
+    store = SimpleVectorStore(tmp_path)
+
+    with pytest.raises(VectorStoreError, match="different document"):
+        store.index_document(
+            "doc_a", [_chunk("doc_b", 0, "foreign")], [[1.0]], "fake", 1
+        )
+
+
+def test_search_rejects_tampered_cross_document_chunk(tmp_path):
+    store = SimpleVectorStore(tmp_path)
+    store.index_document(
+        "doc_a", [_chunk("doc_a", 0, "safe")], [[1.0]], "fake", 1
+    )
+    path = tmp_path / "doc_a.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["chunks"][0]["chunk"]["document_id"] = "doc_b"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(VectorStoreError, match="another document"):
+        store.search("doc_a", [1.0], top_k=1)
+
+
+def test_vector_store_rejects_unsafe_document_id(tmp_path):
+    store = SimpleVectorStore(tmp_path)
+
+    with pytest.raises(InvalidDocumentIdError):
+        store.search(r"doc_\..\outside", [1.0], top_k=1)

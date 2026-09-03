@@ -98,7 +98,8 @@ def test_analyze_groq_connection_failure(
     response = client.post(f"/api/documents/{uploaded_txt_document_id}/analyze")
 
     assert response.status_code == 502
-    assert "groq" in response.json()["detail"].lower()
+    assert "temporarily unavailable" in response.json()["detail"].lower()
+    assert "groq" not in response.json()["detail"].lower()
 
 
 def test_analyze_groq_timeout(client, monkeypatch, uploaded_txt_document_id):
@@ -133,7 +134,9 @@ def test_analyze_missing_api_key_returns_500(
     response = client.post(f"/api/documents/{uploaded_txt_document_id}/analyze")
 
     assert response.status_code == 500
-    assert "groq_api_key" in response.json()["detail"].lower()
+    detail = response.json()["detail"].lower()
+    assert "server is not configured" in detail
+    assert "groq_api_key" not in detail
 
 
 def test_analyze_invalid_api_key_returns_502(

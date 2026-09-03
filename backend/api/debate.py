@@ -18,6 +18,7 @@ from ai.base import (
 )
 from ai.client import get_ai_client
 from ai.embeddings.base import EmbeddingError
+from ai.safe_errors import safe_ai_error_detail
 from schemas.debate import DebateErrorResponse, DebateResult
 from services.debate_service import (
     DebateAllAgentsFailedError,
@@ -31,6 +32,7 @@ from services.document_service import (
     DocumentTooLargeForAnalysisError,
 )
 from services.retrieval_service import DocumentNotIndexedError
+from storage.path_safety import validate_document_id
 from storage.vector_store import VectorStoreError
 
 logger = logging.getLogger("blindspot.debate_api")
@@ -65,9 +67,9 @@ async def debate_document_endpoint(document_id: str) -> DebateResult:
     records which succeeded/failed. If every agent fails, or the Moderator
     itself fails, a clear error is returned instead of a fabricated result.
     """
-    ai_client = get_ai_client()
-
+    validate_document_id(document_id)
     try:
+        ai_client = get_ai_client()
         return await run_debate(document_id, ai_client)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
@@ -81,36 +83,36 @@ async def debate_document_endpoint(document_id: str) -> DebateResult:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except EmbeddingError as exc:
         logger.error("Embedding error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document retrieval is temporarily unavailable.") from exc
     except VectorStoreError as exc:
         logger.error("Vector store error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document retrieval is temporarily unavailable.") from exc
     except AIConfigurationError as exc:
         # A missing/invalid server-side configuration (e.g. no GROQ_API_KEY)
         # is not the caller's fault -- surfaced as a 500, not a 4xx.
         logger.error("AI configuration error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIAuthenticationError as exc:
         logger.error("AI authentication error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIRateLimitError as exc:
         logger.warning("AI rate limit hit debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=429, detail=exc.message) from exc
+        raise HTTPException(status_code=429, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIConnectionError as exc:
         logger.error("AI connection error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AITimeoutError as exc:
         logger.error("AI timeout debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=504, detail=exc.message) from exc
+        raise HTTPException(status_code=504, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIModelUnavailableError as exc:
         logger.error("AI model unavailable debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIResponseError as exc:
         logger.error("AI response error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "debate")) from exc
     except AIClientError as exc:  # catch-all for any other AI client failure
         logger.error("AI client error debating %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "debate")) from exc
     except DebateAllAgentsFailedError as exc:
         logger.error("All agents failed debating %s: %s", document_id, exc.message)
         raise HTTPException(status_code=502, detail=exc.message) from exc

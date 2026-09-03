@@ -89,7 +89,10 @@ async def read_and_validate_upload(upload_file: UploadFile) -> tuple[bytes, str,
     extension, file_type = validate_filename_and_extension(upload_file.filename)
     validate_mime_type(upload_file.content_type, file_type)
 
-    raw_bytes = await upload_file.read()
+    # Read at most one byte beyond the limit. Reading the entire request first
+    # would allow an oversized upload to consume unbounded application memory
+    # before the configured limit could be enforced.
+    raw_bytes = await upload_file.read(MAX_FILE_SIZE_BYTES + 1)
     validate_file_size(len(raw_bytes))
 
     return raw_bytes, extension, file_type

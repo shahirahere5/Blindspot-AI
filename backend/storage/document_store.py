@@ -14,6 +14,7 @@ from pathlib import Path
 
 from config import DOCUMENTS_DIR, UPLOADS_DIR
 from schemas.document import NormalizedDocument
+from storage.path_safety import document_path
 
 
 class DocumentStoreError(Exception):
@@ -35,7 +36,7 @@ class DocumentStore:
 
     def save_raw_file(self, document_id: str, extension: str, data: bytes) -> Path:
         """Persist the original uploaded bytes to disk and return the path."""
-        destination = self.uploads_dir / f"{document_id}{extension}"
+        destination = document_path(self.uploads_dir, document_id, extension)
         try:
             destination.write_bytes(data)
         except OSError as exc:
@@ -44,7 +45,9 @@ class DocumentStore:
 
     def save_normalized_document(self, document: NormalizedDocument) -> Path:
         """Persist the normalized document as JSON and return the path."""
-        destination = self.documents_dir / f"{document.document_id}.json"
+        destination = document_path(
+            self.documents_dir, document.document_id, ".json"
+        )
         try:
             destination.write_text(
                 json.dumps(document.model_dump(mode="json"), indent=2),
@@ -58,7 +61,7 @@ class DocumentStore:
 
     def load_normalized_document(self, document_id: str) -> NormalizedDocument | None:
         """Load a normalized document by ID, or return None if not found."""
-        path = self.documents_dir / f"{document_id}.json"
+        path = document_path(self.documents_dir, document_id, ".json")
         if not path.exists():
             return None
         try:
@@ -67,10 +70,32 @@ class DocumentStore:
             raise DocumentStoreError(
                 f"Failed to read normalized document '{document_id}': {exc}"
             ) from exc
-        return NormalizedDocument.model_validate(raw)
+        try:
+            document = NormalizedDocument.model_validate(raw)
+        except Exception as exc:  # Pydantic validation errors are storage corruption
+            raise DocumentStoreError(
+                f"Stored document '{document_id}' is invalid."
+            ) from exc
+        if document.document_id != document_id:
+            raise DocumentStoreError(
+                f"Stored document '{document_id}' has a mismatched document ID."
+            )
+        return document
 
     def document_exists(self, document_id: str) -> bool:
-        return (self.documents_dir / f"{document_id}.json").exists()
+        return document_path(self.documents_dir, document_id, ".json").exists()
+
+    def delete_raw_file(self, document_id: str, extension: str) -> None:
+        """Best-effort cleanup target for an upload that failed processing."""
+        path = document_path(self.uploads_dir, document_id, extension)
+        if not path.exists():
+            return
+        try:
+            path.unlink()
+        except OSError as exc:
+            raise DocumentStoreError(
+                f"Failed to delete uploaded file '{document_id}': {exc}"
+            ) from exc
 
 
 # Shared singleton instance used across the API layer.

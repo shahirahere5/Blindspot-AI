@@ -6,7 +6,7 @@ Why this instead of a real semantic embedding model or a paid embedding
 API:
 
 * The project's stated constraints are "use free resources wherever
-  possible" and explicitly rule out Ollama/a local LLM. A hosted embedding
+  possible" and avoid adding a separate local LLM runtime. A hosted embedding
   API would need its own paid/rate-limited account, and Groq (the
   project's only configured AI provider) does not serve embeddings, so
   assuming it could would be incorrect.

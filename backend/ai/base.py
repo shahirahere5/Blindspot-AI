@@ -1,11 +1,9 @@
 """
 AI client abstraction.
 
-`AIClient` is the interface the rest of the application depends on. Phase 2
-ships a single concrete implementation (`GroqClient`), but other providers
-(or a local model via a future `OllamaClient`) can implement the same
-interface and be swapped in via `get_ai_client()` without touching
-`services/analysis_service.py`.
+`AIClient` is the interface the rest of the application depends on. The
+current concrete implementation is `GroqClient`; the abstraction keeps
+provider transport details out of the analysis and debate services.
 """
 
 from __future__ import annotations

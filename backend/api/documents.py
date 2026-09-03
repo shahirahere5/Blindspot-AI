@@ -23,6 +23,13 @@ def _new_document_id() -> str:
     return f"doc_{uuid.uuid4()}"
 
 
+def _cleanup_failed_upload(document_id: str, extension: str) -> None:
+    try:
+        document_store.delete_raw_file(document_id, extension)
+    except DocumentStoreError:
+        logger.exception("Failed to clean up raw upload for %s", document_id)
+
+
 @router.post(
     "/upload",
     response_model=UploadResponse,
@@ -59,15 +66,18 @@ async def upload_document(file: UploadFile) -> UploadResponse:
             filename=file.filename or f"{document_id}{extension}",
         )
     except UnsupportedFileTypeError as exc:
+        _cleanup_failed_upload(document_id, extension)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except DocumentProcessingError as exc:
         logger.warning("Processing failed for %s: %s", document_id, exc.message)
+        _cleanup_failed_upload(document_id, extension)
         raise HTTPException(
             status_code=422,
             detail=f"Failed to process file: {exc.message}",
         ) from exc
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client
         logger.exception("Unexpected error while processing %s", document_id)
+        _cleanup_failed_upload(document_id, extension)
         raise HTTPException(
             status_code=500, detail="Unexpected error while processing file."
         ) from exc
@@ -77,6 +87,7 @@ async def upload_document(file: UploadFile) -> UploadResponse:
         document_store.save_normalized_document(normalized_document)
     except DocumentStoreError as exc:
         logger.exception("Failed to persist normalized document %s", document_id)
+        _cleanup_failed_upload(document_id, extension)
         raise HTTPException(
             status_code=500, detail="Failed to persist normalized document."
         ) from exc

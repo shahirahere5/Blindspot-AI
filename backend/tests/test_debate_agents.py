@@ -128,7 +128,8 @@ async def test_agent_handles_ai_client_errors(error):
     )
 
     assert result.status == AgentStatus.FAILED
-    assert result.error == error.message
+    assert result.error == "This agent could not complete its analysis."
+    assert "groq" not in result.error.lower()
     assert result.agent == AgentRole.ETHICS
 
 

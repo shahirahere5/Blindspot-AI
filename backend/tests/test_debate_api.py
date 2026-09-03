@@ -136,6 +136,8 @@ def test_debate_one_agent_failure_still_returns_200(
         a for a in body["agent_analyses"] if a["agent"] == "security"
     )
     assert security_analysis["status"] == "failed"
+    assert security_analysis["error"] == "This agent could not complete its analysis."
+    assert "rate limit" not in security_analysis["error"].lower()
     assert body["metadata"]["agents_failed"] == ["security"]
 
 
@@ -204,6 +206,7 @@ def test_debate_missing_api_key_returns_500(
     response = client.post(f"/api/documents/{uploaded_txt_document_id}/debate")
 
     assert response.status_code == 500
+    assert "groq_api_key" not in response.json()["detail"].lower()
 
 
 def test_debate_invalid_api_key_returns_502(

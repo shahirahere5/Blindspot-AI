@@ -34,6 +34,7 @@ from services.retrieval_service import (
     ensure_document_indexed,
     retrieve_relevant_chunks,
 )
+from storage.path_safety import validate_document_id
 from storage.vector_store import VectorStoreError
 
 logger = logging.getLogger("blindspot.rag_api")
@@ -58,6 +59,7 @@ async def index_document_endpoint(document_id: str) -> IndexDocumentResponse:
     doubles as the "re-index" operation if a document's content or the
     configured embedding provider ever changes.
     """
+    validate_document_id(document_id)
     try:
         document = get_document_or_raise(document_id)
         ensure_document_is_analyzable(document)
@@ -71,10 +73,10 @@ async def index_document_endpoint(document_id: str) -> IndexDocumentResponse:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except EmbeddingError as exc:
         logger.error("Embedding error indexing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document indexing is temporarily unavailable.") from exc
     except VectorStoreError as exc:
         logger.error("Vector store error indexing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document indexing is temporarily unavailable.") from exc
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client
         logger.exception("Unexpected error indexing document %s", document_id)
         raise HTTPException(
@@ -107,6 +109,7 @@ async def retrieve_chunks_endpoint(
     /debate call would actually see. Auto-indexes the document first if it
     hasn't been indexed yet.
     """
+    validate_document_id(document_id)
     try:
         document = get_document_or_raise(document_id)
         ensure_document_is_analyzable(document)
@@ -122,12 +125,12 @@ async def retrieve_chunks_endpoint(
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except EmbeddingError as exc:
         logger.error("Embedding error retrieving for %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document retrieval is temporarily unavailable.") from exc
     except VectorStoreError as exc:
         logger.error(
             "Vector store error retrieving for %s: %s", document_id, exc.message
         )
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(status_code=500, detail="Document retrieval is temporarily unavailable.") from exc
     except Exception as exc:  # noqa: BLE001 - never leak internals to the client
         logger.exception("Unexpected error retrieving chunks for %s", document_id)
         raise HTTPException(

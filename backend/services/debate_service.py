@@ -101,8 +101,6 @@ def _filter_source_locations(items: list[Any], valid_locations: set[int]) -> Non
     against locations that genuinely exist in the document, dropping any
     that don't. Shared logic mirroring Phase 2's safeguard, generalized to
     any object exposing a `source_locations: list[int]` attribute."""
-    if not valid_locations:
-        return
     for item in items:
         item.source_locations = [
             loc for loc in item.source_locations if loc in valid_locations
@@ -137,7 +135,7 @@ async def _run_single_agent(
             agent=agent,
             role=role_title,
             status=AgentStatus.FAILED,
-            error=exc.message,
+            error="This agent could not complete its analysis.",
         )
     except Exception as exc:  # noqa: BLE001 - one agent must never crash the debate
         logger.exception("Agent '%s' failed unexpectedly", agent.value)
@@ -145,7 +143,7 @@ async def _run_single_agent(
             agent=agent,
             role=role_title,
             status=AgentStatus.FAILED,
-            error=f"Unexpected error running {role_title}: {exc}",
+            error="This agent could not complete its analysis.",
         )
 
     try:

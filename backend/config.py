@@ -114,6 +114,23 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw_value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_csv(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """Read a comma-separated environment variable as trimmed values."""
+    raw_value = os.environ.get(name)
+    if raw_value is None:
+        return default
+    return tuple(item.strip() for item in raw_value.split(",") if item.strip())
+
+
+# Browser origins permitted to call the API directly. The defaults are the
+# two loopback forms used by Vite in development; deployments should set this
+# to their exact frontend origin(s). An empty value disables cross-origin use.
+FRONTEND_ORIGINS = _env_csv(
+    "FRONTEND_ORIGINS",
+    ("http://localhost:5173", "http://127.0.0.1:5173"),
+)
+
+
 # ---------------------------------------------------------------------------
 # Phase 2: AI analysis configuration
 # ---------------------------------------------------------------------------

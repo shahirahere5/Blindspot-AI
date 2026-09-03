@@ -1,0 +1,11 @@
+# Frontend dependencies and build output
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+frontend/.vite/
+frontend/.env
+frontend/.env.*
+!frontend/.env.example
+
+# Workspace tooling
+.dist/

@@ -26,6 +26,7 @@ from pathlib import Path
 
 from config import RAG_VECTOR_STORE_PATH
 from schemas.rag import DocumentChunk, RetrievedChunk
+from storage.path_safety import document_path
 
 
 class VectorStoreError(Exception):
@@ -62,7 +63,7 @@ class SimpleVectorStore:
         self.storage_dir.mkdir(parents=True, exist_ok=True)
 
     def _path_for(self, document_id: str) -> Path:
-        return self.storage_dir / f"{document_id}.json"
+        return document_path(self.storage_dir, document_id, ".json")
 
     def is_indexed(self, document_id: str) -> bool:
         return self._path_for(document_id).exists()
@@ -92,6 +93,10 @@ class SimpleVectorStore:
             raise VectorStoreError(
                 f"Got {len(chunks)} chunks but {len(vectors)} vectors -- "
                 "these must be the same length."
+            )
+        if any(chunk.document_id != document_id for chunk in chunks):
+            raise VectorStoreError(
+                "Cannot index chunks belonging to a different document."
             )
 
         payload = {
@@ -126,11 +131,16 @@ class SimpleVectorStore:
     def _load_raw(self, document_id: str) -> dict:
         path = self._path_for(document_id)
         try:
-            return json.loads(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise VectorStoreError(
                 f"Failed to read vector index for document '{document_id}': {exc}"
             ) from exc
+        if not isinstance(raw, dict) or raw.get("document_id") != document_id:
+            raise VectorStoreError("Vector index document ID does not match its path.")
+        if not isinstance(raw.get("chunks"), list):
+            raise VectorStoreError("Vector index has an invalid chunk collection.")
+        return raw
 
     def search(
         self, document_id: str, query_vector: list[float], top_k: int
@@ -150,10 +160,19 @@ class SimpleVectorStore:
 
         raw = self._load_raw(document_id)
         scored: list[RetrievedChunk] = []
-        for entry in raw["chunks"]:
-            chunk = DocumentChunk.model_validate(entry["chunk"])
-            score = _cosine_similarity(query_vector, entry["vector"])
-            scored.append(RetrievedChunk(chunk=chunk, score=score))
+        try:
+            for entry in raw["chunks"]:
+                chunk = DocumentChunk.model_validate(entry["chunk"])
+                if chunk.document_id != document_id:
+                    raise VectorStoreError(
+                        "Vector index contains a chunk from another document."
+                    )
+                score = _cosine_similarity(query_vector, entry["vector"])
+                scored.append(RetrievedChunk(chunk=chunk, score=score))
+        except VectorStoreError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise VectorStoreError("Vector index contains invalid data.") from exc
 
         scored.sort(key=lambda item: item.score, reverse=True)
         return scored[: max(0, top_k)]

@@ -81,3 +81,21 @@ def test_document_id_is_not_the_filename(client, sample_txt_bytes):
     response = _upload(client, "my_secret_plan.txt", sample_txt_bytes, "text/plain")
     body = response.json()
     assert "my_secret_plan" not in body["document_id"]
+
+
+def test_failed_processing_removes_orphaned_raw_upload(
+    client, monkeypatch, sample_txt_bytes
+):
+    import api.documents as documents_module
+    from processing.exceptions import DocumentProcessingError
+
+    class BrokenProcessor:
+        def process(self, **_kwargs):
+            raise DocumentProcessingError("corrupt fixture")
+
+    monkeypatch.setattr(documents_module, "get_processor", lambda _type: BrokenProcessor())
+
+    response = _upload(client, "broken.txt", sample_txt_bytes, "text/plain")
+
+    assert response.status_code == 422
+    assert list(documents_module.document_store.uploads_dir.iterdir()) == []

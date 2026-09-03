@@ -3,6 +3,8 @@ the default (RAG-disabled) Phase 2 behavior."""
 
 from __future__ import annotations
 
+import json
+
 import config
 import api.analysis as analysis_api_module
 import services.analysis_service as analysis_service_module
@@ -107,6 +109,18 @@ def test_analysis_with_rag_enabled_filters_fabricated_locations(
     assert response.status_code == 200
     body = response.json()
     assert body["risks"][0]["source_locations"] == [1]
+
+
+def test_analysis_clears_sources_when_no_location_is_valid():
+    from schemas.analysis import AnalysisReport
+    from services.analysis_service import _filter_source_locations
+
+    payload = json.loads(VALID_ANALYSIS_JSON)
+    payload["document_id"] = "doc_a"
+    report = AnalysisReport.model_validate(payload)
+    _filter_source_locations(report, set())
+
+    assert report.risks[0].source_locations == []
 
 
 def test_analysis_with_rag_enabled_missing_document_returns_404(client, monkeypatch):

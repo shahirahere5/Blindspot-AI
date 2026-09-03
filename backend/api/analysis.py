@@ -18,6 +18,7 @@ from ai.base import (
 )
 from ai.client import get_ai_client
 from ai.embeddings.base import EmbeddingError
+from ai.safe_errors import safe_ai_error_detail
 from schemas.analysis import AnalysisErrorResponse, AnalysisReport
 from services.analysis_service import AnalysisGenerationError, analyze_document
 from services.document_service import (
@@ -27,6 +28,7 @@ from services.document_service import (
     DocumentTooLargeForAnalysisError,
 )
 from services.retrieval_service import DocumentNotIndexedError
+from storage.path_safety import validate_document_id
 from storage.vector_store import VectorStoreError
 
 logger = logging.getLogger("blindspot.analysis_api")
@@ -54,9 +56,9 @@ async def analyze_document_endpoint(document_id: str) -> AnalysisReport:
     processed document, identifying risks, assumptions, biases, missing
     perspectives, unanswered questions, and recommendations.
     """
-    ai_client = get_ai_client()
-
+    validate_document_id(document_id)
     try:
+        ai_client = get_ai_client()
         return await analyze_document(document_id, ai_client)
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
@@ -70,36 +72,42 @@ async def analyze_document_endpoint(document_id: str) -> AnalysisReport:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except EmbeddingError as exc:
         logger.error("Embedding error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=500, detail="Document retrieval is temporarily unavailable."
+        ) from exc
     except VectorStoreError as exc:
         logger.error("Vector store error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=500, detail="Document retrieval is temporarily unavailable."
+        ) from exc
     except AIConfigurationError as exc:
         # A missing/invalid server-side configuration (e.g. no GROQ_API_KEY)
         # is not the caller's fault -- surfaced as a 500, not a 4xx.
         logger.error("AI configuration error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=500, detail=exc.message) from exc
+        raise HTTPException(
+            status_code=500, detail=safe_ai_error_detail(exc, "analysis")
+        ) from exc
     except AIAuthenticationError as exc:
         logger.error("AI authentication error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AIRateLimitError as exc:
         logger.warning("AI rate limit hit analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=429, detail=exc.message) from exc
+        raise HTTPException(status_code=429, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AIConnectionError as exc:
         logger.error("AI connection error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AITimeoutError as exc:
         logger.error("AI timeout analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=504, detail=exc.message) from exc
+        raise HTTPException(status_code=504, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AIModelUnavailableError as exc:
         logger.error("AI model unavailable analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AIResponseError as exc:
         logger.error("AI response error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AIClientError as exc:  # catch-all for any other AI client failure
         logger.error("AI client error analyzing %s: %s", document_id, exc.message)
-        raise HTTPException(status_code=502, detail=exc.message) from exc
+        raise HTTPException(status_code=502, detail=safe_ai_error_detail(exc, "analysis")) from exc
     except AnalysisGenerationError as exc:
         logger.error("Analysis generation error for %s: %s", document_id, exc.message)
         raise HTTPException(status_code=422, detail=exc.message) from exc
