@@ -31,6 +31,7 @@ from services.document_service import (
     DocumentNotReadyError,
     DocumentTooLargeForAnalysisError,
 )
+from services.graph_ingestion_service import ingest_debate
 from services.retrieval_service import DocumentNotIndexedError
 from storage.path_safety import validate_document_id
 from storage.vector_store import VectorStoreError
@@ -70,7 +71,12 @@ async def debate_document_endpoint(document_id: str) -> DebateResult:
     validate_document_id(document_id)
     try:
         ai_client = get_ai_client()
-        return await run_debate(document_id, ai_client)
+        result = await run_debate(document_id, ai_client)
+        try:
+            ingest_debate(result)
+        except Exception:  # noqa: BLE001 - graph persistence must not break debate
+            logger.exception("Debate succeeded but graph ingestion failed for %s", document_id)
+        return result
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except DocumentNotReadyError as exc:

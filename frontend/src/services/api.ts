@@ -6,6 +6,7 @@ import type {
   VersionHistory,
   VersionedUploadResponse,
   ComparisonReport,
+  KnowledgeGraph,
 } from "../types/api";
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -63,6 +64,7 @@ const SAFE_SERVER_DETAILS = [
   /^The AI service returned an invalid response\. Please try again\.$/,
   /^Document (indexing|retrieval) is temporarily unavailable\.$/,
   /^Version comparison is temporarily unavailable\.$/,
+  /^Knowledge graph is temporarily unavailable\.$/,
 ];
 
 function safeErrorDetail(status: number, detail: string | null): string | null {
@@ -243,6 +245,29 @@ function validateComparison(value: ComparisonReport): ComparisonReport {
   return value;
 }
 
+function validateGraph(value: KnowledgeGraph): KnowledgeGraph {
+  const record = value as unknown as Record<string, unknown>;
+  ensureDocumentId(record);
+  ensureArrays(record, ["nodes", "edges", "diagnostics"]);
+  if (record.scope !== "document" && record.scope !== "series") {
+    throw new ApiError("The backend returned an invalid graph scope.");
+  }
+  for (const node of value.nodes) {
+    if (!isRecord(node) || typeof node.id !== "string" || typeof node.type !== "string"
+      || typeof node.label !== "string" || !Array.isArray(node.document_ids)
+      || !Array.isArray(node.origins) || !isRecord(node.metadata)) {
+      throw new ApiError("The backend returned an invalid graph node.");
+    }
+  }
+  for (const edge of value.edges) {
+    if (!isRecord(edge) || typeof edge.id !== "string" || typeof edge.source !== "string"
+      || typeof edge.target !== "string" || typeof edge.type !== "string") {
+      throw new ApiError("The backend returned an invalid graph relationship.");
+    }
+  }
+  return value;
+}
+
 export async function uploadDocument(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -297,4 +322,14 @@ export async function compareDocumentVersions(oldDocumentId: string, newDocument
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ old_document_id: oldDocumentId, new_document_id: newDocumentId }),
   }));
+}
+
+export async function getKnowledgeGraph(
+  documentId: string,
+  scope: "document" | "series" = "document",
+): Promise<KnowledgeGraph> {
+  const params = new URLSearchParams({ scope });
+  return validateGraph(await request<KnowledgeGraph>(
+    `/api/documents/${encodeURIComponent(documentId)}/graph?${params.toString()}`,
+  ));
 }

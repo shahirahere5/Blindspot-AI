@@ -25,11 +25,13 @@ def client(tmp_path, monkeypatch):
     vector_store_dir = tmp_path / "vector_store"
     version_groups_dir = tmp_path / "version_groups"
     comparison_cache_dir = tmp_path / "comparison_cache"
+    graph_store_dir = tmp_path / "knowledge_graph"
     uploads_dir.mkdir()
     documents_dir.mkdir()
     vector_store_dir.mkdir()
     version_groups_dir.mkdir()
     comparison_cache_dir.mkdir()
+    graph_store_dir.mkdir()
 
     import config
 
@@ -38,6 +40,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "RAG_VECTOR_STORE_PATH", vector_store_dir)
     monkeypatch.setattr(config, "VERSION_GROUPS_DIR", version_groups_dir)
     monkeypatch.setattr(config, "COMPARISON_CACHE_DIR", comparison_cache_dir)
+    monkeypatch.setattr(config, "GRAPH_STORE_DIR", graph_store_dir)
 
     import storage.document_store as store_module
 
@@ -87,6 +90,19 @@ def client(tmp_path, monkeypatch):
 
     monkeypatch.setattr(comparison_service_module, "version_store", isolated_version_store)
     monkeypatch.setattr(comparison_service_module, "comparison_cache", isolated_comparison_cache)
+
+    import storage.graph_store as graph_store_module
+
+    isolated_graph_store = graph_store_module.GraphStore(graph_store_dir)
+    monkeypatch.setattr(graph_store_module, "graph_store", isolated_graph_store)
+
+    import services.graph_ingestion_service as graph_ingestion_module
+    import services.graph_service as graph_service_module
+
+    monkeypatch.setattr(graph_ingestion_module, "graph_store", isolated_graph_store)
+    monkeypatch.setattr(graph_ingestion_module, "version_store", isolated_version_store)
+    monkeypatch.setattr(graph_service_module, "graph_store", isolated_graph_store)
+    monkeypatch.setattr(graph_service_module, "version_store", isolated_version_store)
 
     import main as main_module
 

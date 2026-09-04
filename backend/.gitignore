@@ -18,10 +18,12 @@ data/uploads/*
 data/documents/*
 data/version_groups/*
 data/comparison_cache/*
+data/knowledge_graph/*
 !data/uploads/.gitkeep
 !data/documents/.gitkeep
 !data/version_groups/.gitkeep
 !data/comparison_cache/.gitkeep
+!data/knowledge_graph/.gitkeep
 
 # OS / editor
 .DS_Store

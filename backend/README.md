@@ -1,6 +1,6 @@
 # Blind Spot AI
 
-Blind Spot AI reviews decision documents from multiple perspectives and tracks how their blind spots change across explicit revisions. A React and TypeScript dashboard uploads documents to a FastAPI backend, where content is validated, normalized, optionally retrieved through RAG, and sent to Groq for structured analysis, comparison, or a six-specialist debate with moderator synthesis.
+Blind Spot AI reviews decision documents from multiple perspectives, tracks how blind spots change across explicit revisions, and connects validated findings in a persistent knowledge graph. A React and TypeScript dashboard uploads documents to a FastAPI backend, where content is validated, normalized, optionally retrieved through RAG, and sent to Groq for structured analysis, comparison, or a six-specialist debate with moderator synthesis.
 
 ## Current features
 
@@ -10,7 +10,9 @@ Blind Spot AI reviews decision documents from multiple perspectives and tracks h
 - Optimist, Skeptic, Security, Financial, Ethics, and Legal agents plus a moderator
 - Optional document-scoped RAG with source-location validation
 - Explicit, persistent version families with semantic old/new comparison and separate evidence citations
-- React dashboard with loading, empty, retry, error, analysis, debate, version, and source states
+- Persistent, document-scoped relationship graphs built deterministically from validated analysis, debate, comparison, and visual evidence
+- Typed graph diagnostics for unsupported risks/assumptions, unmitigated risks, repeated missing perspectives, and unaddressed recommendations
+- React dashboard with loading, empty, retry, error, analysis, debate, version, graph, diagnostic, and source states
 - Backend and frontend automated tests
 
 ## Architecture and technology
@@ -21,18 +23,19 @@ React 19 + TypeScript + Vite
           HTTP API
              |
 FastAPI + Pydantic
-  |          |                 |
-processors   Groq analysis     six agents + moderator
-  |          |                 |
+  |          |                 |                  |
+processors   Groq analysis     six agents + moderator   graph ingestion
+  |          |                 |                  |
 text + optional vision evidence -> validated structured results
   |
 optional chunking -> hashing embeddings -> per-document JSON vector index
 explicit version links -> deterministic diff -> isolated old/new semantic comparison
+validated structured outputs -> atomic JSON relationship graph
 ```
 
 The optional vision layer uses an OpenAI-compatible provider to turn selected visuals into validated textual evidence. The server assigns image/page/slide provenance, then persists that evidence in the existing normalized document. RAG, analysis, debate, and source validation therefore use the same pipeline for textual and visual evidence. The text model is unchanged.
 
-The repository's current RAG implementation uses deterministic local feature-hashing embeddings and a persistent JSON vector store. It does not require a model download or a separate vector database. The backend owns document processing, AI credentials, retrieval, schemas, and source validation. Frontend types mirror the Pydantic API contracts.
+The repository's current RAG implementation uses deterministic local feature-hashing embeddings and a persistent JSON vector store. It does not require a model download or a separate vector database. RAG performs relevance retrieval; the knowledge graph stores explicit typed relationships. The graph does not replace retrieval and is not automatically injected into Groq prompts. The backend owns document processing, AI credentials, retrieval, schemas, source validation, and graph persistence. Frontend types mirror the Pydantic API contracts.
 
 Backend dependencies include FastAPI, Uvicorn, Pydantic, HTTPX, PyMuPDF, python-docx, python-pptx, Pillow, and Pytest. Frontend dependencies include React, Vite, TypeScript, Vitest, Testing Library, and jsdom.
 
@@ -46,22 +49,23 @@ Blindspot-AI/
 |-- backend/
 |   |-- .env.example
 |   |-- main.py                 FastAPI app, CORS, and exception handlers
-|   |-- config.py               upload, AI, RAG, and origin configuration
+|   |-- config.py               upload, AI, RAG, graph, and origin configuration
 |   |-- requirements.txt
 |   |-- pytest.ini
 |   |-- README.md
 |   |-- ai/                     text/vision clients, prompts, JSON safety, embeddings
-|   |-- api/                    document, analysis, debate, version comparison, and RAG routes
+|   |-- api/                    document, analysis, debate, comparison, RAG, and graph routes
 |   |-- processing/             format-specific processors
 |   |-- rag/                    chunking and context construction
 |   |-- schemas/                Pydantic contracts
-|   |-- services/               orchestration and retrieval services
-|   |-- storage/                document, version, comparison-cache, path, and vector persistence
+|   |-- services/               orchestration, retrieval, graph ingestion, queries, and diagnostics
+|   |-- storage/                document, version, comparison, vector, and graph persistence
 |   |-- data/
 |   |   |-- documents/
 |   |   |-- uploads/
 |   |   |-- version_groups/
-|   |   `-- comparison_cache/
+|   |   |-- comparison_cache/
+|   |   `-- knowledge_graph/
 |   `-- tests/
 `-- frontend/
     |-- .env.example
@@ -127,6 +131,9 @@ Backend variables are documented in `backend/.env.example`.
 | `RAG_EMBEDDING_PROVIDER` | `hashing` | Local embedding provider |
 | `RAG_EMBEDDING_DIMENSION` | `256` | Hashing vector size |
 | `RAG_VECTOR_STORE_PATH` | `backend/data/vector_store` | Persistent index directory |
+| `GRAPH_MAX_NODES` | `300` | Maximum nodes returned by one graph request |
+| `GRAPH_MAX_EDGES` | `600` | Maximum relationships returned by one graph request |
+| `GRAPH_MAX_TRAVERSAL_DEPTH` | `2` | Maximum bounded neighbor traversal depth (capped at 5) |
 | `FRONTEND_ORIGINS` | local Vite origins | Explicit comma-separated CORS allowlist |
 | `MULTIMODAL_ENABLED` | `false` | Enables optional visual evidence extraction |
 | `VISION_PROVIDER` | `groq` | `groq` or a generic `openai_compatible` endpoint |
@@ -160,6 +167,16 @@ Visual provider output is schema-validated and normalized into visible text, a s
 Analysis validates extracted AI JSON against `AnalysisReport`. Debate runs the six fixed specialist roles independently and sends successful results to the moderator; one specialist failure is recorded safely, while all-agent or moderator failure returns an error. Raw provider diagnostics are logged server-side but are not returned to clients.
 
 RAG is opt-in with `RAG_ENABLED=true`. It retains source metadata, auto-indexes when needed, and stores one validated index per document. Index payloads and chunks must match the requested document ID. Any model-proposed source location not present in the document or retrieved context is removed, including when the valid source set is empty.
+
+## Knowledge graph
+
+Successful analysis, debate, and version-comparison responses are mapped into graph contributions without another AI request. Controlled nodes represent documents, version groups, sources, evidence, risks, assumptions, biases, missing perspectives, questions, recommendations, agents, and agent findings. Controlled relationships represent containment, version membership/predecessors, evidence support/source provenance, recommendations, agent attribution, and explicit comparison lifecycle outcomes.
+
+Node and edge IDs are stable SHA-256-derived identifiers scoped by document, version family, finding type, and normalized content. Each analysis, debate, or comparison artifact is atomically upserted into `backend/data/knowledge_graph/graph.json`; re-ingestion replaces that artifact instead of duplicating it. Generated graph data is ignored by Git. Graph-storage failure is logged but does not change an otherwise successful analysis, debate, or comparison response.
+
+Normal graph reads include only the selected document. Version-series reads include explicitly grouped versions and their comparison contributions. Evidence is promoted only when its source location matches normalized document content; image-derived blocks retain visual provenance. Neighbor queries validate node IDs and bound relationship filters, depth, nodes, and edges.
+
+The graph view provides current-document and version-series scope, node-type filters, keyboard-selectable SVG nodes, textual connected relationships, provenance metadata, lifecycle outcomes, and deterministic “What am I missing?” diagnostics. The dependency-free SVG keeps the local setup small; backend limits prevent accidental oversized responses.
 
 ## Version memory and comparison
 
@@ -196,8 +213,10 @@ Validated comparison reports are cached by immutable old ID, new ID, and model t
 | `POST` | `/api/documents/{document_id}/debate` | Run specialists and moderator |
 | `POST` | `/api/documents/{document_id}/index` | Force a RAG re-index |
 | `POST` | `/api/documents/{document_id}/retrieve` | Retrieve document-scoped chunks |
+| `GET` | `/api/documents/{document_id}/graph` | Get a bounded document or version-series graph with optional node/relationship filters |
+| `GET` | `/api/documents/{document_id}/graph/nodes/{node_id}` | Get bounded neighbors for a graph node |
 
-Retrieval accepts `{"query": "financial risks", "top_k": 3}`. Comparison accepts `{"old_document_id": "doc_...", "new_document_id": "doc_..."}`. The version upload is multipart with `file` plus optional `version_label` and `notes` fields.
+Retrieval accepts `{"query": "financial risks", "top_k": 3}`. Comparison accepts `{"old_document_id": "doc_...", "new_document_id": "doc_..."}`. The version upload is multipart with `file` plus optional `version_label` and `notes` fields. Graph reads accept `scope=document|series`, repeated `node_type` and `relationship_type` filters, and bounded `node_limit`, `edge_limit`, `depth`, and `limit` parameters where applicable.
 
 ## Tests
 
@@ -220,6 +239,9 @@ Tests use isolated storage and fake AI/embedding providers; they do not make ext
 - There is no authentication or multi-user document ownership model.
 - Analysis and debate reports are generated on demand and are not persisted.
 - Local JSON locking protects concurrent requests within one backend process; multi-process deployment would require a transactional database or cross-process lock.
+- Graph matching is deliberately conservative: differently worded findings remain distinct unless an explicit structured comparison connects them.
+- Analysis and debate artifacts are persisted in graph form only after a successful run; there is no historical event log for every regeneration.
+- The dependency-free SVG graph uses a deterministic column layout intended for bounded, hackathon-scale graphs rather than freeform graph editing.
 - The hashing embedder is a lexical baseline, not a semantic transformer model.
 - JSON-vector search is brute-force and intended for local, document-scale workloads.
 - Embedded DOCX images, native PowerPoint charts/SmartArt, and raw image-vector retrieval are not processed visually.

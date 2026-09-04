@@ -213,3 +213,59 @@ export interface DebateResult {
   overall_assessment: string;
   metadata: Record<string, unknown>;
 }
+
+export type GraphNodeType =
+  | "document" | "version_group" | "source" | "evidence" | "risk"
+  | "assumption" | "bias" | "missing_perspective" | "question"
+  | "recommendation" | "agent" | "finding";
+
+export type GraphEdgeType =
+  | "contains" | "version_of" | "previous_version" | "has_source"
+  | "supports" | "addressed_by" | "identified" | "present_in"
+  | "introduced_in" | "persists_in" | "resolved_in"
+  | "partially_addressed_in" | "addressed_in" | "not_addressed_in"
+  | "no_longer_applicable_in";
+
+export type GraphOrigin = "deterministic" | "analysis" | "debate" | "version_comparison";
+
+export type GraphDiagnosticType =
+  | "orphan_risk" | "unmitigated_risk" | "unsupported_assumption"
+  | "repeated_missing_perspective" | "stale_recommendation";
+
+export interface GraphNode {
+  id: string;
+  type: GraphNodeType;
+  label: string;
+  description: string;
+  document_ids: string[];
+  origins: GraphOrigin[];
+  metadata: Record<string, unknown>;
+}
+
+export interface GraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  type: GraphEdgeType;
+  origin: GraphOrigin;
+  metadata: Record<string, unknown>;
+}
+
+export interface GraphDiagnostic {
+  type: GraphDiagnosticType;
+  node_id: string;
+  title: string;
+  description: string;
+  severity: string;
+}
+
+export interface KnowledgeGraph {
+  document_id: string;
+  scope: "document" | "series";
+  version_group_id: string | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  diagnostics: GraphDiagnostic[];
+  truncated: boolean;
+  metadata: Record<string, unknown>;
+}

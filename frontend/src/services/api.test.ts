@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analyzeDocument, API_TIMEOUT_MS, compareDocumentVersions, getDocument, getVersionHistory, uploadDocument, uploadDocumentVersion } from "./api";
+import { analyzeDocument, API_TIMEOUT_MS, compareDocumentVersions, getDocument, getKnowledgeGraph, getVersionHistory, uploadDocument, uploadDocumentVersion } from "./api";
+import { graphFixture } from "../test/fixtures";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -123,5 +124,24 @@ describe("API service", () => {
     })));
 
     await expect(analyzeDocument("doc_123")).rejects.toThrow("invalid 'risks' field");
+  });
+
+  it("loads an explicitly scoped knowledge graph", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse({ ...graphFixture, scope: "series" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const graph = await getKnowledgeGraph("doc id/1", "series");
+
+    expect(graph.nodes).toHaveLength(5);
+    expect(fetchMock.mock.calls[0]![0]).toMatch(/documents\/doc%20id%2F1\/graph\?scope=series$/);
+  });
+
+  it("rejects malformed graph relationships", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      ...graphFixture,
+      edges: [{ type: "supports" }],
+    })));
+
+    await expect(getKnowledgeGraph("doc_123")).rejects.toThrow("invalid graph relationship");
   });
 });

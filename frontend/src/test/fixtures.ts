@@ -1,4 +1,4 @@
-import type { AnalysisReport, DebateResult, NormalizedDocument } from "../types/api";
+import type { AnalysisReport, DebateResult, KnowledgeGraph, NormalizedDocument } from "../types/api";
 
 export const documentFixture: NormalizedDocument = {
   document_id: "doc_test-123",
@@ -105,4 +105,100 @@ export const debateFixture: DebateResult = {
   recommendations: analysisFixture.recommendations,
   overall_assessment: "Proceed only after validating the core assumptions.",
   metadata: { successful_agents: ["skeptic"], rag_enabled: true },
+};
+
+export const graphFixture: KnowledgeGraph = {
+  document_id: documentFixture.document_id,
+  scope: "document",
+  version_group_id: null,
+  nodes: [
+    {
+      id: "gn_11111111111111111111111111111111",
+      type: "document",
+      label: "strategy.pdf",
+      description: "Current document",
+      document_ids: [documentFixture.document_id],
+      origins: ["deterministic"],
+      metadata: { file_type: "pdf" },
+    },
+    {
+      id: "gn_22222222222222222222222222222222",
+      type: "risk",
+      label: "Customer concentration",
+      description: "One customer accounts for most planned revenue.",
+      document_ids: [documentFixture.document_id],
+      origins: ["analysis"],
+      metadata: { severity: "high" },
+    },
+    {
+      id: "gn_33333333333333333333333333333333",
+      type: "recommendation",
+      label: "Build a diversified pipeline",
+      description: "Reduce dependency on a single customer.",
+      document_ids: [documentFixture.document_id],
+      origins: ["analysis"],
+      metadata: { priority: "high" },
+    },
+    {
+      id: "gn_44444444444444444444444444444444",
+      type: "evidence",
+      label: "Revenue depends on one customer",
+      description: "Revenue depends on one customer.",
+      document_ids: [documentFixture.document_id],
+      origins: ["analysis"],
+      metadata: { source_locations: [2], visual_derived: false },
+    },
+    {
+      id: "gn_55555555555555555555555555555555",
+      type: "source",
+      label: "Page 2",
+      description: "Revenue depends on one customer.",
+      document_ids: [documentFixture.document_id],
+      origins: ["analysis"],
+      metadata: { source_type: "page", source_location: 2, version_number: null },
+    },
+  ],
+  edges: [
+    {
+      id: "ge_11111111111111111111111111111111",
+      source: "gn_11111111111111111111111111111111",
+      target: "gn_22222222222222222222222222222222",
+      type: "contains",
+      origin: "deterministic",
+      metadata: {},
+    },
+    {
+      id: "ge_22222222222222222222222222222222",
+      source: "gn_22222222222222222222222222222222",
+      target: "gn_33333333333333333333333333333333",
+      type: "addressed_by",
+      origin: "analysis",
+      metadata: {},
+    },
+    {
+      id: "ge_33333333333333333333333333333333",
+      source: "gn_44444444444444444444444444444444",
+      target: "gn_22222222222222222222222222222222",
+      type: "supports",
+      origin: "analysis",
+      metadata: {},
+    },
+    {
+      id: "ge_44444444444444444444444444444444",
+      source: "gn_44444444444444444444444444444444",
+      target: "gn_55555555555555555555555555555555",
+      type: "has_source",
+      origin: "analysis",
+      metadata: {},
+    },
+  ],
+  diagnostics: [{
+    type: "orphan_risk",
+    node_id: "gn_22222222222222222222222222222222",
+    title: "Risk lacks grounded evidence",
+    description: "No validated evidence supports this risk.",
+    severity: "warning",
+  }],
+  truncated: false,
+  metadata: { node_count: 5, edge_count: 4 },
 };

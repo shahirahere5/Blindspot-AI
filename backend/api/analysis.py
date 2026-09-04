@@ -21,6 +21,7 @@ from ai.embeddings.base import EmbeddingError
 from ai.safe_errors import safe_ai_error_detail
 from schemas.analysis import AnalysisErrorResponse, AnalysisReport
 from services.analysis_service import AnalysisGenerationError, analyze_document
+from services.graph_ingestion_service import ingest_analysis
 from services.document_service import (
     DocumentHasNoAnalyzableContentError,
     DocumentNotFoundError,
@@ -59,7 +60,12 @@ async def analyze_document_endpoint(document_id: str) -> AnalysisReport:
     validate_document_id(document_id)
     try:
         ai_client = get_ai_client()
-        return await analyze_document(document_id, ai_client)
+        report = await analyze_document(document_id, ai_client)
+        try:
+            ingest_analysis(report)
+        except Exception:  # noqa: BLE001 - graph persistence must not break analysis
+            logger.exception("Analysis succeeded but graph ingestion failed for %s", document_id)
+        return report
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except DocumentNotReadyError as exc:

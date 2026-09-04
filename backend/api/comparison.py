@@ -18,6 +18,7 @@ from services.document_service import (
     DocumentNotReadyError,
     DocumentTooLargeForAnalysisError,
 )
+from services.graph_ingestion_service import ingest_comparison
 from storage.comparison_cache import ComparisonCacheError
 from storage.path_safety import validate_document_id
 from storage.vector_store import VectorStoreError
@@ -32,9 +33,18 @@ async def compare_document_versions(request: ComparisonRequest) -> ComparisonRep
     validate_document_id(request.old_document_id)
     validate_document_id(request.new_document_id)
     try:
-        return await compare_versions(
+        report = await compare_versions(
             request.old_document_id, request.new_document_id, get_ai_client()
         )
+        try:
+            ingest_comparison(report)
+        except Exception:  # noqa: BLE001 - graph persistence must not break comparison
+            logger.exception(
+                "Comparison succeeded but graph ingestion failed for %s and %s",
+                request.old_document_id,
+                request.new_document_id,
+            )
+        return report
     except DocumentNotFoundError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     except (VersionRelationshipError, DocumentNotReadyError, DocumentHasNoAnalyzableContentError) as exc:

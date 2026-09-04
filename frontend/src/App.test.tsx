@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { ApiError } from "./services/api";
-import { analysisFixture, debateFixture, documentFixture, visualDocumentFixture } from "./test/fixtures";
+import { analysisFixture, debateFixture, documentFixture, graphFixture, visualDocumentFixture } from "./test/fixtures";
 
 const apiMocks = vi.hoisted(() => ({
   uploadDocument: vi.fn(),
@@ -13,6 +13,7 @@ const apiMocks = vi.hoisted(() => ({
   getVersionHistory: vi.fn(),
   uploadDocumentVersion: vi.fn(),
   compareDocumentVersions: vi.fn(),
+  getKnowledgeGraph: vi.fn(),
 }));
 
 vi.mock("./services/api", async (importOriginal) => {
@@ -234,5 +235,65 @@ describe("Blind Spot AI workspace", () => {
     expect(alert).toHaveTextContent("The AI service is busy");
     expect(screen.getByRole("button", { name: "Try again" })).toBeInTheDocument();
     await waitFor(() => expect(apiMocks.analyzeDocument).toHaveBeenCalledOnce());
+  });
+
+  it("renders graph relationships, filters, details, diagnostics, and version scope", async () => {
+    apiMocks.getKnowledgeGraph
+      .mockResolvedValueOnce(graphFixture)
+      .mockResolvedValueOnce({
+        ...graphFixture,
+        scope: "series",
+        version_group_id: "vg_test",
+        nodes: graphFixture.nodes.map((node) => node.type === "document"
+          ? { ...node, label: "V2 · strategy.pdf", metadata: { ...node.metadata, version_number: 2 } }
+          : node),
+        edges: [{
+          ...graphFixture.edges[0],
+          id: "ge_33333333333333333333333333333333",
+          source: graphFixture.nodes[1]!.id,
+          target: graphFixture.nodes[0]!.id,
+          type: "resolved_in",
+          origin: "version_comparison",
+        }],
+      });
+    render(<App />);
+    const user = await openFixtureDocument();
+    await user.click(screen.getByRole("button", { name: /graph/i }));
+
+    expect(await screen.findByRole("img", { name: /5 graph nodes and 4 relationships/i })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /Risk: Customer concentration/i }));
+    expect(screen.getByRole("heading", { name: "Customer concentration" })).toBeInTheDocument();
+    expect(screen.getByText("One customer accounts for most planned revenue.")).toBeInTheDocument();
+    expect(screen.getByText("Risk lacks grounded evidence")).toBeInTheDocument();
+
+    await user.click(screen.getByLabelText("Risks"));
+    expect(screen.getByText("4 of 5 nodes visible")).toBeInTheDocument();
+    await user.click(screen.getByLabelText("Risks"));
+    await user.click(screen.getByRole("button", { name: /Source: Page 2/i }));
+    expect(screen.getByText("Source location")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Version series" }));
+    expect(await screen.findByText("Lifecycle relationships")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Document: V2 · strategy.pdf/i })).toBeInTheDocument();
+    expect(screen.getAllByText("resolved in")).toHaveLength(2);
+    expect(apiMocks.getKnowledgeGraph).toHaveBeenLastCalledWith(documentFixture.document_id, "series");
+  });
+
+  it("shows graph empty and safe retry states", async () => {
+    let finishGraph: ((value: typeof graphFixture) => void) | undefined;
+    apiMocks.getKnowledgeGraph
+      .mockImplementationOnce(() => new Promise((resolve) => { finishGraph = resolve; }))
+      .mockRejectedValueOnce(new ApiError("Knowledge graph is temporarily unavailable.", 500))
+      .mockResolvedValueOnce(graphFixture);
+    render(<App />);
+    const user = await openFixtureDocument();
+    await user.click(screen.getByRole("button", { name: /graph/i }));
+    expect(screen.getByRole("status")).toHaveTextContent("Loading knowledge graph");
+    finishGraph?.({ ...graphFixture, nodes: [], edges: [], diagnostics: [] });
+    expect(await screen.findByText("Run analysis or debate first")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Refresh graph" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Knowledge graph is temporarily unavailable.");
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(await screen.findByRole("img", { name: /5 graph nodes/i })).toBeInTheDocument();
   });
 });
