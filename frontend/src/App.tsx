@@ -3,10 +3,11 @@ import { AnalysisView } from "./components/AnalysisView";
 import { DebateView } from "./components/DebateView";
 import { DocumentView } from "./components/DocumentView";
 import { UploadPanel } from "./components/UploadPanel";
+import { VersionView } from "./components/VersionView";
 import { analyzeDocument, ApiError, debateDocument, getDocument, uploadDocument } from "./services/api";
 import type { AnalysisReport, DebateResult, NormalizedDocument } from "./types/api";
 
-type Tab = "document" | "analysis" | "debate";
+type Tab = "document" | "analysis" | "debate" | "versions";
 type Operation = "upload" | "open" | "analysis" | "debate" | null;
 
 function errorMessage(error: unknown): string {
@@ -121,7 +122,7 @@ export default function App() {
             </header>
 
             <nav className="tab-bar" aria-label="Document workspace">
-              {(["document", "analysis", "debate"] as const).map((tab, index) => (
+              {(["document", "analysis", "debate", "versions"] as const).map((tab, index) => (
                 <button
                   key={tab}
                   className={activeTab === tab ? "active" : ""}
@@ -143,6 +144,7 @@ export default function App() {
               {activeTab === "debate" && (
                 <DebateView document={document} debate={debate} isLoading={operation === "debate"} error={debateError} onDebate={runDebate} />
               )}
+              {activeTab === "versions" && <VersionView document={document} />}
             </div>
           </div>
         )}

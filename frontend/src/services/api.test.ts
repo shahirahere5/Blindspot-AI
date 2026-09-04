@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analyzeDocument, API_TIMEOUT_MS, getDocument, uploadDocument } from "./api";
+import { analyzeDocument, API_TIMEOUT_MS, compareDocumentVersions, getDocument, getVersionHistory, uploadDocument, uploadDocumentVersion } from "./api";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -14,6 +14,31 @@ afterEach(() => {
 });
 
 describe("API service", () => {
+  it("uses explicit version and comparison endpoints", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ version_group_id: null, versions: [{ document_id: "doc_1", version_number: 1, filename: "v1.txt", file_type: "txt", created_at: "2026-09-01T00:00:00Z" }] }))
+      .mockResolvedValueOnce(jsonResponse({ success: true, document_id: "doc_2", filename: "v2.txt", file_type: "txt", status: "processed", metadata: {}, warnings: [], version_group_id: "vg_1", version_number: 2, previous_document_id: "doc_1", created_at: "2026-09-01T00:00:00Z" }))
+      .mockResolvedValueOnce(jsonResponse({
+        old_document_id: "doc_1", new_document_id: "doc_2", summary: "Changed", structural_diff: {},
+        new_risks: [], resolved_risks: [], persistent_risks: [], new_assumptions: [], resolved_assumptions: [], persistent_assumptions: [],
+        new_biases: [], resolved_biases: [], persistent_biases: [], new_missing_perspectives: [], resolved_missing_perspectives: [], persistent_missing_perspectives: [],
+        new_questions: [], resolved_questions: [], persistent_questions: [], recommendation_progress: [], meaningful_additions: [], meaningful_removals: [], regressions: [],
+      }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await getVersionHistory("doc_1");
+    await uploadDocumentVersion("doc_1", new File(["two"], "v2.txt"), "Review", "Notes");
+    await compareDocumentVersions("doc_1", "doc_2");
+
+    const historyCall = fetchMock.mock.calls.at(0)!;
+    const uploadCall = fetchMock.mock.calls.at(1)!;
+    const comparisonCall = fetchMock.mock.calls.at(2)!;
+    expect(historyCall[0]).toMatch(/doc_1\/versions$/);
+    expect((uploadCall[1] as RequestInit).body).toBeInstanceOf(FormData);
+    expect(comparisonCall[0]).toMatch(/documents\/compare$/);
+    expect((comparisonCall[1] as RequestInit).body).toBe(JSON.stringify({ old_document_id: "doc_1", new_document_id: "doc_2" }));
+  });
+
   it("uploads a multipart file through the centralized endpoint", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse({
       success: true,

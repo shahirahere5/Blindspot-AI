@@ -13,9 +13,31 @@ function renderMetadata(value: unknown): string {
 
 export function DocumentView({ document }: { document: NormalizedDocument }) {
   const metadata = Object.entries(document.metadata);
+  const multimodal = typeof document.metadata.multimodal === "object"
+    && document.metadata.multimodal !== null
+    && !Array.isArray(document.metadata.multimodal)
+    ? document.metadata.multimodal as Record<string, unknown>
+    : null;
+  const multimodalStatus = typeof multimodal?.status === "string" ? multimodal.status : null;
 
   return (
     <div className="view-stack">
+      {multimodalStatus && (
+        <div className={`multimodal-banner ${multimodalStatus}`} role="status">
+          <strong>
+            {multimodalStatus === "completed" && "Visual analysis complete"}
+            {multimodalStatus === "partial" && "Visual analysis partially complete"}
+            {multimodalStatus === "unavailable" && "Visual analysis unavailable"}
+          </strong>
+          <span>
+            {multimodalStatus === "completed"
+              ? "Visual evidence is included in the normalized document."
+              : multimodalStatus === "partial"
+                ? "Available visual evidence was kept; some items could not be analyzed."
+                : "No provider-derived visual evidence was added."}
+          </span>
+        </div>
+      )}
       {document.warnings.length > 0 && (
         <div className="warning-banner" role="status">
           <strong>Processing note</strong>

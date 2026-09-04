@@ -3,6 +3,9 @@ import type {
   DebateResult,
   NormalizedDocument,
   UploadResponse,
+  VersionHistory,
+  VersionedUploadResponse,
+  ComparisonReport,
 } from "../types/api";
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -50,8 +53,8 @@ function defaultMessage(status: number): string {
 }
 
 const SAFE_SERVER_DETAILS = [
-  /^AI (analysis|debate) is unavailable because the server is not configured\.$/,
-  /^AI (analysis|debate) is temporarily unavailable\. Please try again\.$/,
+  /^AI (analysis|debate|comparison) is unavailable because the server is not configured\.$/,
+  /^AI (analysis|debate|comparison) is temporarily unavailable\. Please try again\.$/,
   /^The AI provider rejected the server credentials\.$/,
   /^The AI service rate limit was reached\. Please wait and try again\.$/,
   /^The AI service is temporarily unavailable\. Please try again shortly\.$/,
@@ -59,6 +62,7 @@ const SAFE_SERVER_DETAILS = [
   /^The configured AI model is currently unavailable\.$/,
   /^The AI service returned an invalid response\. Please try again\.$/,
   /^Document (indexing|retrieval) is temporarily unavailable\.$/,
+  /^Version comparison is temporarily unavailable\.$/,
 ];
 
 function safeErrorDetail(status: number, detail: string | null): string | null {
@@ -191,6 +195,54 @@ function validateDebate(value: DebateResult): DebateResult {
   return value;
 }
 
+function validateHistory(value: VersionHistory): VersionHistory {
+  const record = value as unknown as Record<string, unknown>;
+  ensureArrays(record, ["versions"]);
+  for (const version of value.versions) {
+    if (!isRecord(version) || typeof version.document_id !== "string" || typeof version.version_number !== "number"
+      || typeof version.filename !== "string" || typeof version.file_type !== "string" || typeof version.created_at !== "string") {
+      throw new ApiError("The backend returned invalid version history.");
+    }
+  }
+  return value;
+}
+
+function validateVersionedUpload(value: VersionedUploadResponse): VersionedUploadResponse {
+  validateUpload(value);
+  const record = value as unknown as Record<string, unknown>;
+  if (typeof record.version_group_id !== "string" || typeof record.version_number !== "number"
+    || typeof record.previous_document_id !== "string" || typeof record.created_at !== "string") {
+    throw new ApiError("The backend returned an invalid version upload response.");
+  }
+  return value;
+}
+
+const comparisonCollections = [
+  "new_risks", "resolved_risks", "persistent_risks", "new_assumptions",
+  "resolved_assumptions", "persistent_assumptions", "new_biases", "resolved_biases",
+  "persistent_biases", "new_missing_perspectives", "resolved_missing_perspectives",
+  "persistent_missing_perspectives", "new_questions", "resolved_questions",
+  "persistent_questions", "recommendation_progress", "meaningful_additions",
+  "meaningful_removals", "regressions",
+] as const;
+
+function validateComparison(value: ComparisonReport): ComparisonReport {
+  const record = value as unknown as Record<string, unknown>;
+  ensureArrays(record, comparisonCollections);
+  if (typeof record.old_document_id !== "string" || typeof record.new_document_id !== "string"
+    || typeof record.summary !== "string" || !isRecord(record.structural_diff)) {
+    throw new ApiError("The backend returned an invalid comparison response.");
+  }
+  for (const key of comparisonCollections) {
+    for (const finding of value[key]) {
+      if (!isRecord(finding) || !Array.isArray(finding.old_source_locations) || !Array.isArray(finding.new_source_locations)) {
+        throw new ApiError("The backend returned invalid comparison evidence.");
+      }
+    }
+  }
+  return value;
+}
+
 export async function uploadDocument(file: File): Promise<UploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
@@ -218,4 +270,31 @@ export async function debateDocument(documentId: string): Promise<DebateResult> 
     `/api/documents/${encodeURIComponent(documentId)}/debate`,
     { method: "POST" },
   ));
+}
+
+export async function getVersionHistory(documentId: string): Promise<VersionHistory> {
+  return validateHistory(await request<VersionHistory>(
+    `/api/documents/${encodeURIComponent(documentId)}/versions`,
+  ));
+}
+
+export async function uploadDocumentVersion(
+  parentDocumentId: string, file: File, label: string, notes: string,
+): Promise<VersionedUploadResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (label.trim()) formData.append("version_label", label.trim());
+  if (notes.trim()) formData.append("notes", notes.trim());
+  return validateVersionedUpload(await request<VersionedUploadResponse>(
+    `/api/documents/${encodeURIComponent(parentDocumentId)}/versions`,
+    { method: "POST", body: formData },
+  ));
+}
+
+export async function compareDocumentVersions(oldDocumentId: string, newDocumentId: string): Promise<ComparisonReport> {
+  return validateComparison(await request<ComparisonReport>("/api/documents/compare", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ old_document_id: oldDocumentId, new_document_id: newDocumentId }),
+  }));
 }

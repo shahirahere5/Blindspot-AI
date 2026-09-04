@@ -121,7 +121,7 @@ export function UploadPanel({ isBusy, error, onUpload, onOpenDocument }: UploadP
         {isBusy && (
           <LoadingState
             title={selectedFile ? "Uploading and processing" : "Opening document"}
-            detail="The backend is extracting and normalizing the document."
+            detail="The backend is extracting text and, when configured, analyzing visual evidence."
           />
         )}
         {error && !isBusy && <ErrorState message={error} />}

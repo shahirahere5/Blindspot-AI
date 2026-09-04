@@ -13,6 +13,32 @@ export const documentFixture: NormalizedDocument = {
   warnings: [],
 };
 
+export const visualDocumentFixture: NormalizedDocument = {
+  document_id: "doc_visual-123",
+  filename: "strategy-chart.png",
+  file_type: "image",
+  status: "processed",
+  content: [{
+    type: "image",
+    location: 1,
+    text: "Visual summary:\nRevenue rises while operating margin falls.",
+    extra: { visual_analysis: true, visual_source: "multimodal" },
+  }],
+  metadata: {
+    width: 1200,
+    height: 800,
+    multimodal: {
+      status: "completed",
+      provider: "test-provider",
+      model: "test-vision",
+      attempted: 1,
+      succeeded: 1,
+      failed: 0,
+    },
+  },
+  warnings: [],
+};
+
 export const analysisFixture: AnalysisReport = {
   document_id: documentFixture.document_id,
   status: "completed",
