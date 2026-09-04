@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { analyzeDocument, API_TIMEOUT_MS, compareDocumentVersions, getDocument, getKnowledgeGraph, getVersionHistory, uploadDocument, uploadDocumentVersion } from "./api";
+import { analyzeDocument, API_TIMEOUT_MS, clearConversation, compareDocumentVersions, createConversation, getConversation, getDocument, getKnowledgeGraph, getVersionHistory, sendConversationMessage, uploadDocument, uploadDocumentVersion } from "./api";
 import { graphFixture } from "../test/fixtures";
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -143,5 +143,39 @@ describe("API service", () => {
     })));
 
     await expect(getKnowledgeGraph("doc_123")).rejects.toThrow("invalid graph relationship");
+  });
+
+  it("uses document-scoped conversation endpoints", async () => {
+    const conversation = {
+      conversation_id: "conv_1", document_id: "doc_1", scope: "document",
+      version_group_id: null, created_at: "now", updated_at: "now", messages: [],
+    };
+    const message = { message_id: "msg_1", role: "assistant", content: "Answer", created_at: "now" };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse(conversation, 201))
+      .mockResolvedValueOnce(jsonResponse(conversation))
+      .mockResolvedValueOnce(jsonResponse({ conversation_id: "conv_1", message, conversation: { ...conversation, messages: [message] } }))
+      .mockResolvedValueOnce(jsonResponse(conversation));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await createConversation("doc_1", "document");
+    await getConversation("doc_1", "conv_1");
+    const sent = await sendConversationMessage("doc_1", "conv_1", "Question");
+    await clearConversation("doc_1", "conv_1");
+
+    expect(sent.message.sources).toEqual([]);
+    expect(sent.message.metadata).toEqual({});
+    expect(fetchMock.mock.calls[0]![0]).toMatch(/doc_1\/conversations$/);
+    expect((fetchMock.mock.calls[0]![1] as RequestInit).body).toBe(JSON.stringify({ scope: "document" }));
+    expect(fetchMock.mock.calls[2]![0]).toMatch(/conv_1\/messages$/);
+    expect((fetchMock.mock.calls[3]![1] as RequestInit).method).toBe("DELETE");
+  });
+
+  it("rejects a malformed conversation message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({
+      conversation_id: "conv_1", document_id: "doc_1", scope: "document",
+      created_at: "now", updated_at: "now", messages: [{ role: "assistant", content: "Missing ID" }],
+    })));
+    await expect(getConversation("doc_1", "conv_1")).rejects.toThrow("invalid conversation message");
   });
 });

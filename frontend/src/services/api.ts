@@ -6,7 +6,11 @@ import type {
   VersionHistory,
   VersionedUploadResponse,
   ComparisonReport,
+  Conversation,
+  ConversationMessage,
+  ConversationScope,
   KnowledgeGraph,
+  SendMessageResponse,
 } from "../types/api";
 
 const configuredBaseUrl = import.meta.env.VITE_API_BASE_URL?.trim();
@@ -54,8 +58,8 @@ function defaultMessage(status: number): string {
 }
 
 const SAFE_SERVER_DETAILS = [
-  /^AI (analysis|debate|comparison) is unavailable because the server is not configured\.$/,
-  /^AI (analysis|debate|comparison) is temporarily unavailable\. Please try again\.$/,
+  /^AI (analysis|debate|comparison|conversation) is unavailable because the server is not configured\.$/,
+  /^AI (analysis|debate|comparison|conversation) is temporarily unavailable\. Please try again\.$/,
   /^The AI provider rejected the server credentials\.$/,
   /^The AI service rate limit was reached\. Please wait and try again\.$/,
   /^The AI service is temporarily unavailable\. Please try again shortly\.$/,
@@ -65,6 +69,7 @@ const SAFE_SERVER_DETAILS = [
   /^Document (indexing|retrieval) is temporarily unavailable\.$/,
   /^Version comparison is temporarily unavailable\.$/,
   /^Knowledge graph is temporarily unavailable\.$/,
+  /^Conversation history is temporarily unavailable\.$/,
 ];
 
 function safeErrorDetail(status: number, detail: string | null): string | null {
@@ -331,5 +336,69 @@ export async function getKnowledgeGraph(
   const params = new URLSearchParams({ scope });
   return validateGraph(await request<KnowledgeGraph>(
     `/api/documents/${encodeURIComponent(documentId)}/graph?${params.toString()}`,
+  ));
+}
+
+function normalizeConversationMessage(value: unknown): ConversationMessage {
+  if (!isRecord(value) || typeof value.message_id !== "string"
+    || (value.role !== "user" && value.role !== "assistant")
+    || typeof value.content !== "string") {
+    throw new ApiError("The backend returned an invalid conversation message.");
+  }
+  return {
+    ...(value as unknown as ConversationMessage),
+    sources: Array.isArray(value.sources) ? value.sources as ConversationMessage["sources"] : [],
+    related_findings: Array.isArray(value.related_findings) ? value.related_findings as ConversationMessage["related_findings"] : [],
+    metadata: isRecord(value.metadata) ? value.metadata : {},
+  };
+}
+
+function validateConversation(value: Conversation): Conversation {
+  const record = value as unknown as Record<string, unknown>;
+  ensureDocumentId(record);
+  ensureArrays(record, ["messages"]);
+  if (typeof record.conversation_id !== "string"
+    || (record.scope !== "document" && record.scope !== "series")) {
+    throw new ApiError("The backend returned an invalid conversation.");
+  }
+  return { ...value, messages: value.messages.map(normalizeConversationMessage) };
+}
+
+export async function createConversation(
+  documentId: string, scope: ConversationScope,
+): Promise<Conversation> {
+  return validateConversation(await request<Conversation>(
+    `/api/documents/${encodeURIComponent(documentId)}/conversations`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) },
+  ));
+}
+
+export async function getConversation(documentId: string, conversationId: string): Promise<Conversation> {
+  return validateConversation(await request<Conversation>(
+    `/api/documents/${encodeURIComponent(documentId)}/conversations/${encodeURIComponent(conversationId)}`,
+  ));
+}
+
+export async function sendConversationMessage(
+  documentId: string, conversationId: string, content: string,
+): Promise<SendMessageResponse> {
+  const value = await request<SendMessageResponse>(
+    `/api/documents/${encodeURIComponent(documentId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ content }) },
+  );
+  if (typeof value.conversation_id !== "string") {
+    throw new ApiError("The backend returned an invalid conversational response.");
+  }
+  return {
+    ...value,
+    message: normalizeConversationMessage(value.message),
+    conversation: validateConversation(value.conversation),
+  };
+}
+
+export async function clearConversation(documentId: string, conversationId: string): Promise<Conversation> {
+  return validateConversation(await request<Conversation>(
+    `/api/documents/${encodeURIComponent(documentId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
+    { method: "DELETE" },
   ));
 }

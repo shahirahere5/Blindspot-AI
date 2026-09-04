@@ -269,3 +269,48 @@ export interface KnowledgeGraph {
   truncated: boolean;
   metadata: Record<string, unknown>;
 }
+
+export type ConversationScope = "document" | "series";
+export type ConversationRole = "user" | "assistant";
+
+export interface ConversationSource {
+  source_id: string;
+  document_id: string;
+  source_type: string;
+  source_location: number;
+  version_number: number | null;
+  visual_derived: boolean;
+  excerpt: string;
+}
+
+export interface RelatedFinding {
+  node_id: string;
+  type: string;
+  label: string;
+}
+
+export interface ConversationMessage {
+  message_id: string;
+  role: ConversationRole;
+  content: string;
+  created_at: string;
+  sources: ConversationSource[];
+  related_findings: RelatedFinding[];
+  metadata: Record<string, unknown>;
+}
+
+export interface Conversation {
+  conversation_id: string;
+  document_id: string;
+  scope: ConversationScope;
+  version_group_id: string | null;
+  created_at: string;
+  updated_at: string;
+  messages: ConversationMessage[];
+}
+
+export interface SendMessageResponse {
+  conversation_id: string;
+  message: ConversationMessage;
+  conversation: Conversation;
+}
