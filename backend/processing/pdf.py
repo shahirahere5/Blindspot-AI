@@ -68,8 +68,7 @@ class PDFProcessor(BaseProcessor):
                 metadata={"page_count": page_count},
                 warnings=[
                     "Little to no extractable text was found. "
-                    "This PDF likely requires OCR/multimodal processing "
-                    "in a later phase."
+                    "This PDF requires configured OCR/multimodal processing."
                 ],
             )
 

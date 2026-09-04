@@ -36,6 +36,7 @@ class ContentBlockType(str, Enum):
     PARAGRAPH = "paragraph"
     TABLE = "table"
     TEXT = "text"
+    IMAGE = "image"
 
 
 class ContentBlock(BaseModel):

@@ -16,8 +16,12 @@ pytest-cache-files-*/
 # Local data (uploaded files + generated normalized documents)
 data/uploads/*
 data/documents/*
+data/version_groups/*
+data/comparison_cache/*
 !data/uploads/.gitkeep
 !data/documents/.gitkeep
+!data/version_groups/.gitkeep
+!data/comparison_cache/.gitkeep
 
 # OS / editor
 .DS_Store

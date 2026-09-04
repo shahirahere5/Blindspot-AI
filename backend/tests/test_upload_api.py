@@ -77,6 +77,16 @@ def test_upload_png(client, sample_png_bytes):
     assert body["metadata"]["height"] == 1080
 
 
+def test_corrupt_image_is_rejected_and_raw_upload_is_removed(client):
+    response = _upload(client, "broken.png", b"not a real image", "image/png")
+
+    assert response.status_code == 422
+    assert "process" in response.json()["detail"].lower()
+    import api.documents as documents_module
+
+    assert list(documents_module.document_store.uploads_dir.iterdir()) == []
+
+
 def test_document_id_is_not_the_filename(client, sample_txt_bytes):
     response = _upload(client, "my_secret_plan.txt", sample_txt_bytes, "text/plain")
     body = response.json()

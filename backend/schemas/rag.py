@@ -23,6 +23,8 @@ class DocumentChunk(BaseModel):
     text: str
     source_type: str
     source_location: int
+    version_group_id: str | None = None
+    version_number: int | None = None
 
 
 class RetrievedChunk(BaseModel):

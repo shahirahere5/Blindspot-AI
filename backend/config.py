@@ -26,10 +26,14 @@ BACKEND_DIR = Path(__file__).resolve().parent
 DATA_DIR = BACKEND_DIR / "data"
 UPLOADS_DIR = DATA_DIR / "uploads"
 DOCUMENTS_DIR = DATA_DIR / "documents"
+VERSION_GROUPS_DIR = DATA_DIR / "version_groups"
+COMPARISON_CACHE_DIR = DATA_DIR / "comparison_cache"
 
 # Ensure storage directories exist at import time.
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
+VERSION_GROUPS_DIR.mkdir(parents=True, exist_ok=True)
+COMPARISON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Upload constraints
@@ -187,6 +191,14 @@ RAG_CHUNK_OVERLAP = _env_int("RAG_CHUNK_OVERLAP", 150)
 # Retrieval: how many chunks to retrieve per query by default.
 RAG_TOP_K = _env_int("RAG_TOP_K", 5)
 
+# Phase 8 comparisons use a separately bounded retrieval budget. Retrieval
+# is always performed once per explicitly selected document, preserving the
+# per-document isolation guarantees of the vector store.
+COMPARISON_RAG_TOP_K = _env_int("COMPARISON_RAG_TOP_K", 8)
+MAX_COMPARISON_CONTENT_CHARS = _env_int(
+    "MAX_COMPARISON_CONTENT_CHARS", 30_000
+)
+
 # Embedding provider. "hashing" is the only provider implemented today: a
 # free, fully local, dependency-free, deterministic feature-hashing
 # embedding (see ai/embeddings/hashing.py for why this was chosen over
@@ -206,3 +218,39 @@ RAG_VECTOR_STORE_PATH = Path(
     _env_str("RAG_VECTOR_STORE_PATH", str(DATA_DIR / "vector_store"))
 )
 RAG_VECTOR_STORE_PATH.mkdir(parents=True, exist_ok=True)
+
+# ---------------------------------------------------------------------------
+# Optional multimodal document processing
+# ---------------------------------------------------------------------------
+# Disabled by default so existing text-first uploads never make extra provider
+# calls. The OpenAI-compatible client can use Groq or another compatible
+# endpoint without changing the configured text model.
+MULTIMODAL_ENABLED = _env_bool("MULTIMODAL_ENABLED", False)
+VISION_PROVIDER = _env_str("VISION_PROVIDER", "groq")
+VISION_API_KEY = os.environ.get("VISION_API_KEY") or ""
+VISION_MODEL = os.environ.get("VISION_MODEL") or ""
+VISION_BASE_URL = os.environ.get("VISION_BASE_URL") or ""
+VISION_TIMEOUT_SECONDS = _env_float("VISION_TIMEOUT_SECONDS", 60.0)
+VISION_DOCUMENT_TIMEOUT_SECONDS = _env_float(
+    "VISION_DOCUMENT_TIMEOUT_SECONDS", 150.0
+)
+VISION_CONNECT_TIMEOUT_SECONDS = _env_float(
+    "VISION_CONNECT_TIMEOUT_SECONDS", 5.0
+)
+
+# Resource controls: visual candidates are processed sequentially, capped per
+# document, and downscaled before transport when a rendered PDF page would be
+# excessively large.
+VISION_MAX_ITEMS_PER_DOCUMENT = _env_int("VISION_MAX_ITEMS_PER_DOCUMENT", 10)
+VISION_MAX_IMAGE_PIXELS = _env_int("VISION_MAX_IMAGE_PIXELS", 20_000_000)
+VISION_PDF_RENDER_SCALE = _env_float("VISION_PDF_RENDER_SCALE", 1.5)
+VISION_MIN_TEXT_CHARS_PER_PAGE = _env_int(
+    "VISION_MIN_TEXT_CHARS_PER_PAGE", 20
+)
+VISION_MIN_IMAGE_COVERAGE = _env_float("VISION_MIN_IMAGE_COVERAGE", 0.15)
+VISION_MIN_EMBEDDED_IMAGE_WIDTH = _env_int(
+    "VISION_MIN_EMBEDDED_IMAGE_WIDTH", 200
+)
+VISION_MIN_EMBEDDED_IMAGE_HEIGHT = _env_int(
+    "VISION_MIN_EMBEDDED_IMAGE_HEIGHT", 120
+)

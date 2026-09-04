@@ -23,15 +23,21 @@ def client(tmp_path, monkeypatch):
     uploads_dir = tmp_path / "uploads"
     documents_dir = tmp_path / "documents"
     vector_store_dir = tmp_path / "vector_store"
+    version_groups_dir = tmp_path / "version_groups"
+    comparison_cache_dir = tmp_path / "comparison_cache"
     uploads_dir.mkdir()
     documents_dir.mkdir()
     vector_store_dir.mkdir()
+    version_groups_dir.mkdir()
+    comparison_cache_dir.mkdir()
 
     import config
 
     monkeypatch.setattr(config, "UPLOADS_DIR", uploads_dir)
     monkeypatch.setattr(config, "DOCUMENTS_DIR", documents_dir)
     monkeypatch.setattr(config, "RAG_VECTOR_STORE_PATH", vector_store_dir)
+    monkeypatch.setattr(config, "VERSION_GROUPS_DIR", version_groups_dir)
+    monkeypatch.setattr(config, "COMPARISON_CACHE_DIR", comparison_cache_dir)
 
     import storage.document_store as store_module
 
@@ -44,6 +50,12 @@ def client(tmp_path, monkeypatch):
     import api.documents as documents_module
 
     monkeypatch.setattr(documents_module, "document_store", store_module.document_store)
+
+    import storage.version_store as version_store_module
+
+    isolated_version_store = version_store_module.VersionStore(version_groups_dir)
+    monkeypatch.setattr(version_store_module, "version_store", isolated_version_store)
+    monkeypatch.setattr(documents_module, "version_store", isolated_version_store)
 
     # services.document_service (Phase 2) also imports `document_store`
     # directly, so it needs the same patch to see the isolated test storage.
@@ -65,6 +77,16 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(
         retrieval_service_module, "vector_store", isolated_vector_store
     )
+
+    import storage.comparison_cache as comparison_cache_module
+
+    isolated_comparison_cache = comparison_cache_module.ComparisonCache(comparison_cache_dir)
+    monkeypatch.setattr(comparison_cache_module, "comparison_cache", isolated_comparison_cache)
+
+    import services.comparison_service as comparison_service_module
+
+    monkeypatch.setattr(comparison_service_module, "version_store", isolated_version_store)
+    monkeypatch.setattr(comparison_service_module, "comparison_cache", isolated_comparison_cache)
 
     import main as main_module
 

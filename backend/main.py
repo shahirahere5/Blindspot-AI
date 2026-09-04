@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse
 
 import config
 from api.analysis import router as analysis_router
+from api.comparison import router as comparison_router
 from api.debate import router as debate_router
 from api.documents import router as documents_router
 from api.rag import router as rag_router
@@ -50,6 +51,7 @@ app.include_router(documents_router)
 app.include_router(analysis_router)
 app.include_router(debate_router)
 app.include_router(rag_router)
+app.include_router(comparison_router)
 
 
 @app.exception_handler(InvalidDocumentIdError)

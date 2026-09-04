@@ -96,6 +96,12 @@ def chunk_document(
 
     chunks: list[DocumentChunk] = []
     index = 0
+    version_group_id = document.metadata.get("version_group_id")
+    version_number = document.metadata.get("version_number")
+    if not isinstance(version_group_id, str):
+        version_group_id = None
+    if not isinstance(version_number, int) or version_number < 1:
+        version_number = None
 
     for block in document.content:
         text = (block.text or "").strip()
@@ -110,6 +116,8 @@ def chunk_document(
                     text=piece,
                     source_type=block.type.value,
                     source_location=block.location,
+                    version_group_id=version_group_id,
+                    version_number=version_number,
                 )
             )
             index += 1

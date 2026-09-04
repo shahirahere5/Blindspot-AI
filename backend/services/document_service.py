@@ -27,6 +27,7 @@ _MARKER_LABELS: dict[ContentBlockType, str] = {
     ContentBlockType.PARAGRAPH: "PARAGRAPH",
     ContentBlockType.TABLE: "TABLE",
     ContentBlockType.TEXT: "TEXT",
+    ContentBlockType.IMAGE: "IMAGE",
 }
 
 
@@ -72,16 +73,14 @@ def ensure_document_is_analyzable(document: NormalizedDocument) -> None:
     """
     if document.status == DocumentStatus.PENDING_MULTIMODAL_ANALYSIS:
         raise DocumentNotReadyError(
-            "This document is an image pending multimodal analysis. "
-            "Image understanding is planned for a later phase and is not "
-            "yet supported by the analyzer."
+            "This image has no visual evidence available for analysis. "
+            "Configure multimodal processing and upload it again."
         )
 
     if document.status == DocumentStatus.REQUIRES_MULTIMODAL_PROCESSING:
         raise DocumentNotReadyError(
-            "This document appears to require OCR/multimodal processing "
-            "(e.g. a scanned PDF with no extractable text) which is not "
-            "yet supported by the analyzer."
+            "This document requires visual processing, but no visual evidence "
+            "is available. Configure multimodal processing and upload it again."
         )
 
     if document.status == DocumentStatus.FAILED:
@@ -146,8 +145,7 @@ def prepare_document_for_analysis(
             f"({len(labeled_text):,} characters) exceeds the maximum "
             f"supported for a single analysis pass "
             f"({config.MAX_ANALYSIS_CONTENT_CHARS:,} characters). "
-            "Chunked/RAG-based analysis for large documents is planned for "
-            "a later phase."
+            "Enable RAG or lower the amount of content sent in one request."
         )
 
     content_item_count = sum(1 for block in document.content if (block.text or "").strip())

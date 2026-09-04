@@ -97,6 +97,16 @@ class DocumentStore:
                 f"Failed to delete uploaded file '{document_id}': {exc}"
             ) from exc
 
+    def delete_normalized_document(self, document_id: str) -> None:
+        """Remove a normalized record when a surrounding transaction fails."""
+        path = document_path(self.documents_dir, document_id, ".json")
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            raise DocumentStoreError(
+                f"Failed to delete normalized document '{document_id}': {exc}"
+            ) from exc
+
 
 # Shared singleton instance used across the API layer.
 document_store = DocumentStore()

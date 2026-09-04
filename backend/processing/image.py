@@ -1,8 +1,7 @@
 """Image validation and metadata extraction using Pillow.
 
-Phase 1 deliberately does NOT perform any AI-based image understanding.
-Images are validated, their metadata is extracted, and they are marked as
-pending multimodal analysis for a future phase.
+Images are validated and their metadata is extracted here. Optional visual
+understanding is added by services.multimodal_service after normalization.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from pathlib import Path
 
 from PIL import Image, UnidentifiedImageError
 
+import config
 from processing.base import BaseProcessor
 from processing.exceptions import DocumentProcessingError
 from schemas.document import DocumentStatus, FileType, NormalizedDocument
@@ -34,8 +34,14 @@ class ImageProcessor(BaseProcessor):
         try:
             with Image.open(file_path) as img:
                 width, height = img.size
+                if width * height > max(1, config.VISION_MAX_IMAGE_PIXELS):
+                    raise DocumentProcessingError(
+                        "Image dimensions exceed the configured safe pixel limit."
+                    )
                 image_format = img.format or "UNKNOWN"
                 mode = img.mode
+        except DocumentProcessingError:
+            raise
         except Exception as exc:  # noqa: BLE001
             raise DocumentProcessingError(
                 f"Failed to read image metadata: {exc}"
@@ -54,7 +60,6 @@ class ImageProcessor(BaseProcessor):
                 "mode": mode,
             },
             warnings=[
-                "Image content has not been analyzed. "
-                "Visual/multimodal analysis will be added in a later phase."
+                "Image content requires configured multimodal analysis."
             ],
         )
