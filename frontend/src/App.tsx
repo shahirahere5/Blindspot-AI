@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { AnalysisView } from "./components/AnalysisView";
 import { DebateView } from "./components/DebateView";
 import { DocumentView } from "./components/DocumentView";
@@ -25,6 +25,7 @@ export default function App() {
   const [intakeError, setIntakeError] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [debateError, setDebateError] = useState<string | null>(null);
+  const debateRequestInFlight = useRef(false);
 
   const openDocument = async (documentId: string) => {
     setOperation("open");
@@ -73,7 +74,8 @@ export default function App() {
   };
 
   const runDebate = async () => {
-    if (!document) return;
+    if (!document || debateRequestInFlight.current) return;
+    debateRequestInFlight.current = true;
     setOperation("debate");
     setDebateError(null);
     try {
@@ -81,6 +83,7 @@ export default function App() {
     } catch (error) {
       setDebateError(errorMessage(error));
     } finally {
+      debateRequestInFlight.current = false;
       setOperation(null);
     }
   };

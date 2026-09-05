@@ -15,6 +15,8 @@ and is treated as required configuration -- its absence is a controlled
 
 from __future__ import annotations
 
+import math
+
 import httpx
 
 import config
@@ -133,9 +135,12 @@ class GroqClient(AIClient):
             )
 
         if response.status_code == 429:
+            retry_after = self._parse_retry_after(response)
             raise AIRateLimitError(
                 "The Groq API rate limit was reached for the configured "
-                "API key. Please wait a moment and try again."
+                "API key. Please wait a moment and try again.",
+                retry_after_seconds=retry_after,
+                limit_type=self._classify_rate_limit(response),
             )
 
         if response.status_code == 404:
@@ -196,6 +201,45 @@ class GroqClient(AIClient):
                 return error.get("message")
             if isinstance(error, str):
                 return error
+        return None
+
+    @staticmethod
+    def _parse_retry_after(response: httpx.Response) -> float | None:
+        """Parse Groq's documented numeric Retry-After value without
+        retaining or exposing any other response headers."""
+        raw_value = response.headers.get("retry-after")
+        if not raw_value:
+            return None
+        try:
+            value = float(raw_value)
+        except ValueError:
+            return None
+        return value if math.isfinite(value) and value >= 0 else None
+
+    @classmethod
+    def _classify_rate_limit(cls, response: httpx.Response) -> str | None:
+        """Best-effort, non-sensitive classification for server-side logs.
+
+        Groq can enforce several independent limits. The error text normally
+        names the exhausted unit, while the documented remaining-token and
+        remaining-request headers provide a conservative fallback.
+        """
+        detail = (cls._extract_error_message(response) or "").casefold()
+        patterns = (
+            (("input tokens per minute", "itpm"), "input_tokens_per_minute"),
+            (("output tokens per minute", "otpm"), "output_tokens_per_minute"),
+            (("tokens per minute", "tpm"), "tokens_per_minute"),
+            (("tokens per day", "tpd"), "tokens_per_day"),
+            (("requests per minute", "rpm"), "requests_per_minute"),
+            (("requests per day", "rpd"), "requests_per_day"),
+        )
+        for needles, label in patterns:
+            if any(needle in detail for needle in needles):
+                return label
+        if response.headers.get("x-ratelimit-remaining-tokens") == "0":
+            return "tokens_per_minute"
+        if response.headers.get("x-ratelimit-remaining-requests") == "0":
+            return "requests_per_day"
         return None
 
 

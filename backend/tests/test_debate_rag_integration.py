@@ -44,12 +44,31 @@ def test_debate_without_rag_never_touches_embeddings(
     monkeypatch.setattr(
         debate_service_module.rag_service, "ensure_document_indexed", _explode
     )
+    monkeypatch.setattr(config, "DEBATE_RAG_ENABLED", False)
     _patch_ai_client(monkeypatch, _full_success_client())
 
     response = client.post(f"/api/documents/{uploaded_txt_document_id}/debate")
 
     assert response.status_code == 200
     assert len(response.json()["agent_analyses"]) == 6
+
+
+def test_debate_specific_rag_avoids_changing_normal_analysis_setting(
+    client, monkeypatch, uploaded_txt_document_id
+):
+    monkeypatch.setattr(config, "RAG_ENABLED", False)
+    monkeypatch.setattr(config, "DEBATE_RAG_ENABLED", True)
+    monkeypatch.setattr(config, "DEBATE_RAG_TOP_K", 3)
+    provider = FakeEmbeddingProvider(dimension=4)
+    _patch_embedding_provider(monkeypatch, provider)
+    _patch_ai_client(monkeypatch, _full_success_client())
+
+    response = client.post(f"/api/documents/{uploaded_txt_document_id}/debate")
+
+    assert response.status_code == 200
+    assert response.json()["metadata"]["rag_enabled"] is True
+    assert config.RAG_ENABLED is False
+    assert len(provider.calls) >= 7
 
 
 def test_debate_with_rag_enabled_returns_full_report(

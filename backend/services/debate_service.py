@@ -35,12 +35,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from typing import Any
 
 from pydantic import ValidationError as PydanticValidationError
 
 import config
-from ai.base import AIClient, AIClientError
+from ai.base import AIClient, AIClientError, AIRateLimitError
 from ai.debate_prompts import (
     MODERATOR_SYSTEM_PROMPT,
     build_agent_system_prompt,
@@ -96,6 +98,90 @@ class DebateAllAgentsFailedError(DebateServiceError):
     """Raised when every specialist agent failed, leaving nothing to moderate."""
 
 
+class DebateRequestController:
+    """Bound concurrency, pace request starts, and retry transient 429s.
+
+    One controller is shared by all six specialists and the moderator so a
+    provider-requested cooldown applies to the whole debate, not just to the
+    individual task that received the 429.
+    """
+
+    def __init__(
+        self,
+        ai_client: AIClient,
+        *,
+        max_concurrency: int,
+        max_retries: int,
+        base_delay_seconds: float,
+        max_delay_seconds: float,
+        jitter_seconds: float,
+        request_interval_seconds: float,
+        sleep=asyncio.sleep,
+        clock=time.monotonic,
+        random_uniform=random.uniform,
+    ) -> None:
+        self.ai_client = ai_client
+        self.max_retries = max(0, max_retries)
+        self.base_delay_seconds = max(0.0, base_delay_seconds)
+        self.max_delay_seconds = max(self.base_delay_seconds, max_delay_seconds)
+        self.jitter_seconds = max(0.0, jitter_seconds)
+        self.request_interval_seconds = max(0.0, request_interval_seconds)
+        self._semaphore = asyncio.Semaphore(max(1, max_concurrency))
+        self._schedule_lock = asyncio.Lock()
+        self._next_start_at = 0.0
+        self._sleep = sleep
+        self._clock = clock
+        self._random_uniform = random_uniform
+
+    async def _reserve_request_start(self) -> None:
+        async with self._schedule_lock:
+            wait_seconds = max(0.0, self._next_start_at - self._clock())
+            if wait_seconds:
+                await self._sleep(wait_seconds)
+            now = self._clock()
+            self._next_start_at = max(self._next_start_at, now) + self.request_interval_seconds
+
+    async def _defer_requests(self, delay_seconds: float) -> None:
+        async with self._schedule_lock:
+            self._next_start_at = max(
+                self._next_start_at, self._clock() + max(0.0, delay_seconds)
+            )
+
+    def _retry_delay(self, error: AIRateLimitError, retry_number: int) -> float:
+        exponential = self.base_delay_seconds * (2 ** max(0, retry_number - 1))
+        provider_delay = error.retry_after_seconds or 0.0
+        jitter = self._random_uniform(0.0, self.jitter_seconds)
+        return min(self.max_delay_seconds, max(exponential, provider_delay) + jitter)
+
+    async def generate(self, system_prompt: str, user_prompt: str, *, caller: str) -> str:
+        retries_used = 0
+        while True:
+            try:
+                async with self._semaphore:
+                    await self._reserve_request_start()
+                    return await self.ai_client.generate(system_prompt, user_prompt)
+            except AIRateLimitError as exc:
+                if retries_used >= self.max_retries:
+                    logger.warning(
+                        "%s exhausted %d debate rate-limit retries (limit=%s)",
+                        caller,
+                        self.max_retries,
+                        exc.limit_type or "unknown",
+                    )
+                    raise
+                retries_used += 1
+                delay = self._retry_delay(exc, retries_used)
+                await self._defer_requests(delay)
+                logger.warning(
+                    "%s rate-limited; retry %d/%d in %.2fs (limit=%s)",
+                    caller,
+                    retries_used,
+                    self.max_retries,
+                    delay,
+                    exc.limit_type or "unknown",
+                )
+
+
 def _filter_source_locations(items: list[Any], valid_locations: set[int]) -> None:
     """Cross-check `source_locations` on a list of finding-like objects
     against locations that genuinely exist in the document, dropping any
@@ -113,7 +199,7 @@ async def _run_single_agent(
     labeled_content: str,
     content_item_count: int,
     valid_locations: set[int],
-    semaphore: asyncio.Semaphore,
+    request_control: asyncio.Semaphore | DebateRequestController,
 ) -> AgentAnalysis:
     """Run one specialist agent and always return an `AgentAnalysis`.
 
@@ -127,8 +213,14 @@ async def _run_single_agent(
     user_prompt = build_agent_user_prompt(labeled_content, content_item_count)
 
     try:
-        async with semaphore:
-            raw_response = await ai_client.generate(system_prompt, user_prompt)
+        if isinstance(request_control, DebateRequestController):
+            raw_response = await request_control.generate(
+                system_prompt, user_prompt, caller=f"Agent '{agent.value}'"
+            )
+        else:
+            # Retained for direct unit-level invocation of this internal helper.
+            async with request_control:
+                raw_response = await ai_client.generate(system_prompt, user_prompt)
     except AIClientError as exc:
         logger.warning("Agent '%s' failed (AI client error): %s", agent.value, exc.message)
         return AgentAnalysis(
@@ -199,29 +291,40 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
     untouched if the Moderator call itself fails (connection, timeout,
     missing model, etc) -- a partial result is never fabricated in that case.
 
-    When config.RAG_ENABLED is true, each specialist agent is grounded in
-    chunks retrieved using its *own* perspective as the query (so, e.g.,
-    the Security agent only sees chunks most relevant to security), and the
-    Moderator is grounded in a broader, whole-document retrieval -- instead
-    of every agent and the Moderator sharing one full-document prompt. When
-    false (the default), this is byte-for-byte the same shared-content
-    behavior as before RAG existed.
+    When debate RAG is enabled (independently or through global RAG), each
+    specialist agent is grounded in chunks retrieved using its *own*
+    perspective as the query (so, e.g., the Security agent sees chunks most
+    relevant to security), and the Moderator is grounded in a broader
+    retrieval. When disabled, this uses the legacy shared full-document path.
     """
-    semaphore = asyncio.Semaphore(max(1, config.DEBATE_MAX_CONCURRENT_AGENTS))
+    request_controller = DebateRequestController(
+        ai_client,
+        max_concurrency=config.DEBATE_MAX_CONCURRENT_AGENTS,
+        max_retries=config.DEBATE_MAX_RATE_LIMIT_RETRIES,
+        base_delay_seconds=config.DEBATE_RETRY_BASE_DELAY_SECONDS,
+        max_delay_seconds=config.DEBATE_RETRY_MAX_DELAY_SECONDS,
+        jitter_seconds=config.DEBATE_RETRY_JITTER_SECONDS,
+        request_interval_seconds=config.DEBATE_REQUEST_INTERVAL_SECONDS,
+    )
 
-    if config.RAG_ENABLED:
+    debate_rag_enabled = config.RAG_ENABLED or config.DEBATE_RAG_ENABLED
+    if debate_rag_enabled:
         document = get_document_or_raise(document_id)
         ensure_document_is_analyzable(document)
         rag_service.ensure_document_indexed(document)
 
         agent_rag_contexts: dict[AgentRole, rag_service.RagContext] = {
             agent: rag_service.build_context_from_query(
-                document_id, rag_service.get_agent_retrieval_query(agent)
+                document_id,
+                rag_service.get_agent_retrieval_query(agent),
+                config.DEBATE_RAG_TOP_K,
             )
             for agent in AGENT_ROLES
         }
         moderator_rag_context = rag_service.build_context_from_query(
-            document_id, rag_service.MODERATOR_RETRIEVAL_QUERY
+            document_id,
+            rag_service.MODERATOR_RETRIEVAL_QUERY,
+            config.DEBATE_RAG_TOP_K,
         )
 
         agent_analyses = await asyncio.gather(
@@ -232,7 +335,7 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
                     agent_rag_contexts[agent].content,
                     agent_rag_contexts[agent].item_count,
                     agent_rag_contexts[agent].valid_locations,
-                    semaphore,
+                    request_controller,
                 )
                 for agent in AGENT_ROLES
             ]
@@ -253,7 +356,7 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
                     labeled_content,
                     content_item_count,
                     valid_locations,
-                    semaphore,
+                    request_controller,
                 )
                 for agent in AGENT_ROLES
             ]
@@ -283,8 +386,8 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
 
     # Let AIClientError subclasses propagate untouched -- the API layer maps
     # them to specific, user-facing HTTP errors, exactly as Phase 2 does.
-    raw_moderator_response = await ai_client.generate(
-        MODERATOR_SYSTEM_PROMPT, moderator_user_prompt
+    raw_moderator_response = await request_controller.generate(
+        MODERATOR_SYSTEM_PROMPT, moderator_user_prompt, caller="Moderator"
     )
 
     try:
@@ -337,6 +440,6 @@ async def run_debate(document_id: str, ai_client: AIClient) -> DebateResult:
             "agents_succeeded": [a.agent.value for a in successful],
             "agents_failed": [a.agent.value for a in failed],
             "analyzed_content_items": moderator_content_item_count,
-            "rag_enabled": config.RAG_ENABLED,
+            "rag_enabled": debate_rag_enabled,
         },
     )

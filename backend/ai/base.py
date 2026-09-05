@@ -30,6 +30,17 @@ class AIAuthenticationError(AIClientError):
 class AIRateLimitError(AIClientError):
     """Raised when the AI provider reports that a rate limit has been reached."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        retry_after_seconds: float | None = None,
+        limit_type: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = retry_after_seconds
+        self.limit_type = limit_type
+
 
 class AIConnectionError(AIClientError):
     """Raised when the AI backend cannot be reached at all (network/DNS failure)."""

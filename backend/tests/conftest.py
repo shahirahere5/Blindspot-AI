@@ -44,6 +44,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "COMPARISON_CACHE_DIR", comparison_cache_dir)
     monkeypatch.setattr(config, "GRAPH_STORE_DIR", graph_store_dir)
     monkeypatch.setattr(config, "CONVERSATION_STORE_DIR", conversation_store_dir)
+    # Keep routine tests instantaneous. Rate-limit policy tests opt into
+    # retries and use an injected clock/sleeper where timing is asserted.
+    monkeypatch.setattr(config, "DEBATE_MAX_RATE_LIMIT_RETRIES", 0)
+    monkeypatch.setattr(config, "DEBATE_RETRY_BASE_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(config, "DEBATE_RETRY_MAX_DELAY_SECONDS", 0.0)
+    monkeypatch.setattr(config, "DEBATE_RETRY_JITTER_SECONDS", 0.0)
+    monkeypatch.setattr(config, "DEBATE_REQUEST_INTERVAL_SECONDS", 0.0)
+    monkeypatch.setattr(config, "DEBATE_RAG_ENABLED", False)
 
     import storage.document_store as store_module
 

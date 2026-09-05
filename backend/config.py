@@ -170,12 +170,29 @@ MAX_ANALYSIS_CONTENT_CHARS = _env_int("MAX_ANALYSIS_CONTENT_CHARS", 20_000)
 # ---------------------------------------------------------------------------
 # Phase 3: multi-agent debate engine configuration
 # ---------------------------------------------------------------------------
-# The six specialist agents run concurrently, but concurrency is bounded by
-# a semaphore rather than left uncontrolled, out of consideration for
-# free-tier Groq rate limits. Defaults to running all six at once (there are
-# only six), but can be lowered via the environment if rate limiting becomes
-# an issue on a given Groq account.
-DEBATE_MAX_CONCURRENT_AGENTS = _env_int("DEBATE_MAX_CONCURRENT_AGENTS", 6)
+# All six specialists still run, but request starts use conservative bounded
+# concurrency and pacing. Only transient 429s are retried.
+DEBATE_MAX_CONCURRENT_AGENTS = max(
+    1, min(6, _env_int("DEBATE_MAX_CONCURRENT_AGENTS", 2))
+)
+DEBATE_RAG_ENABLED = _env_bool("DEBATE_RAG_ENABLED", True)
+DEBATE_RAG_TOP_K = max(1, min(10, _env_int("DEBATE_RAG_TOP_K", 3)))
+DEBATE_MAX_RATE_LIMIT_RETRIES = max(
+    0, min(5, _env_int("DEBATE_MAX_RATE_LIMIT_RETRIES", 2))
+)
+DEBATE_RETRY_BASE_DELAY_SECONDS = max(
+    0.0, min(60.0, _env_float("DEBATE_RETRY_BASE_DELAY_SECONDS", 1.0))
+)
+DEBATE_RETRY_MAX_DELAY_SECONDS = max(
+    DEBATE_RETRY_BASE_DELAY_SECONDS,
+    min(120.0, _env_float("DEBATE_RETRY_MAX_DELAY_SECONDS", 30.0)),
+)
+DEBATE_RETRY_JITTER_SECONDS = max(
+    0.0, min(5.0, _env_float("DEBATE_RETRY_JITTER_SECONDS", 0.25))
+)
+DEBATE_REQUEST_INTERVAL_SECONDS = max(
+    0.0, min(10.0, _env_float("DEBATE_REQUEST_INTERVAL_SECONDS", 2.0))
+)
 
 # ---------------------------------------------------------------------------
 # Phase 4: Retrieval-Augmented Generation (RAG) configuration

@@ -126,7 +126,14 @@ Backend variables are documented in `backend/.env.example`.
 | `GROQ_CONNECT_TIMEOUT_SECONDS` | `5` | Provider connection timeout |
 | `GROQ_TIMEOUT_SECONDS` | `60` | Provider request timeout |
 | `MAX_ANALYSIS_CONTENT_CHARS` | `20000` | Non-RAG prompt-size safeguard |
-| `DEBATE_MAX_CONCURRENT_AGENTS` | `6` | Specialist concurrency limit |
+| `DEBATE_MAX_CONCURRENT_AGENTS` | `2` | Maximum simultaneous specialist/provider calls |
+| `DEBATE_REQUEST_INTERVAL_SECONDS` | `2` | Minimum spacing between debate request starts |
+| `DEBATE_RAG_ENABLED` | `true` | Uses bounded, agent-specific retrieval for debate without changing analysis |
+| `DEBATE_RAG_TOP_K` | `3` | Retrieved chunks supplied to each specialist and the moderator |
+| `DEBATE_MAX_RATE_LIMIT_RETRIES` | `2` | Retries per debate call after HTTP 429 |
+| `DEBATE_RETRY_BASE_DELAY_SECONDS` | `1` | Initial exponential-backoff delay |
+| `DEBATE_RETRY_MAX_DELAY_SECONDS` | `30` | Maximum in-request retry delay |
+| `DEBATE_RETRY_JITTER_SECONDS` | `0.25` | Maximum random delay added to retries |
 | `RAG_ENABLED` | `false` | Enables retrieval for analysis and debate |
 | `RAG_CHUNK_SIZE` / `RAG_CHUNK_OVERLAP` | `800` / `150` | Chunking controls |
 | `RAG_TOP_K` | `5` | Default retrieval count |
@@ -176,7 +183,9 @@ Visual provider output is schema-validated and normalized into visible text, a s
 
 ## Analysis, debate, and RAG
 
-Analysis validates extracted AI JSON against `AnalysisReport`. Debate runs the six fixed specialist roles independently and sends successful results to the moderator; one specialist failure is recorded safely, while all-agent or moderator failure returns an error. Raw provider diagnostics are logged server-side but are not returned to clients.
+Analysis validates extracted AI JSON against `AnalysisReport`. Debate runs the six fixed specialist roles independently and sends successful results to the moderator; one specialist failure is recorded safely, while all-agent or moderator failure returns an error. Debate requests use a shared controller with bounded concurrency, paced starts, and finite 429-only retries. Groq's numeric `Retry-After` guidance is honored within the configured maximum; only a safe rate-limit category and delay are logged. Raw provider diagnostics and headers are not returned to clients.
+
+Debate-specific RAG is enabled by default even when general analysis RAG is disabled. The document is indexed once, then six agent-specific queries and one broad moderator query are built before model execution and reused across retries. This avoids sending the same full document seven times while preserving source validation. Set `DEBATE_RAG_ENABLED=false` to restore the legacy full-document debate path.
 
 RAG is opt-in with `RAG_ENABLED=true`. It retains source metadata, auto-indexes when needed, and stores one validated index per document. Index payloads and chunks must match the requested document ID. Any model-proposed source location not present in the document or retrieved context is removed, including when the valid source set is empty.
 

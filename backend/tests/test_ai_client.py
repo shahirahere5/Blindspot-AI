@@ -160,6 +160,40 @@ async def test_generate_raises_rate_limit_error_on_429():
         await client.generate("system", "user")
 
 
+@pytest.mark.asyncio
+async def test_rate_limit_preserves_only_safe_retry_metadata():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            429,
+            headers={"Retry-After": "2.5", "x-private-provider-header": "secret"},
+            json={"error": {"message": "Rate limit reached for tokens per minute"}},
+        )
+
+    client = _client_with_handler(handler)
+    with pytest.raises(AIRateLimitError) as exc_info:
+        await client.generate("system", "user")
+
+    assert exc_info.value.retry_after_seconds == 2.5
+    assert exc_info.value.limit_type == "tokens_per_minute"
+    assert "secret" not in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_invalid_retry_after_is_ignored_safely():
+    client = _client_with_handler(
+        lambda _request: httpx.Response(
+            429,
+            headers={"Retry-After": "not-a-number"},
+            json={"error": {"message": "Rate limit reached"}},
+        )
+    )
+
+    with pytest.raises(AIRateLimitError) as exc_info:
+        await client.generate("system", "user")
+
+    assert exc_info.value.retry_after_seconds is None
+
+
 # ---------------------------------------------------------------------------
 # 7. Invalid model
 # ---------------------------------------------------------------------------

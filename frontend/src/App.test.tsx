@@ -223,6 +223,41 @@ describe("Blind Spot AI workspace", () => {
     expect(screen.getByText("Demand validation is essential.")).toBeInTheDocument();
   });
 
+  it("allows only one debate request while a request is in flight", async () => {
+    render(<App />);
+    const user = await openFixtureDocument();
+    let finishDebate: ((value: typeof debateFixture) => void) | undefined;
+    apiMocks.debateDocument.mockImplementation(() => new Promise((resolve) => { finishDebate = resolve; }));
+
+    await user.click(screen.getByRole("button", { name: /Agent debate/i }));
+    const startButton = screen.getByRole("button", { name: "Start agent debate" });
+    fireEvent.click(startButton);
+    fireEvent.click(startButton);
+
+    expect(apiMocks.debateDocument).toHaveBeenCalledOnce();
+    expect(screen.getByRole("status")).toHaveTextContent("Convening the agent panel");
+    finishDebate?.(debateFixture);
+    expect(await screen.findByText("Where the panel landed")).toBeInTheDocument();
+  });
+
+  it("shows the safe 429 message and retries exactly once per click", async () => {
+    render(<App />);
+    const user = await openFixtureDocument();
+    apiMocks.debateDocument
+      .mockRejectedValueOnce(new ApiError("The AI service rate limit was reached. Please wait and try again.", 429))
+      .mockResolvedValueOnce(debateFixture);
+
+    await user.click(screen.getByRole("button", { name: /Agent debate/i }));
+    await user.click(screen.getByRole("button", { name: "Start agent debate" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "The AI service rate limit was reached. Please wait and try again.",
+    );
+    await user.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("Where the panel landed")).toBeInTheDocument();
+    expect(apiMocks.debateDocument).toHaveBeenCalledTimes(2);
+  });
+
   it("shows analysis retry state when the AI request fails", async () => {
     render(<App />);
     const user = await openFixtureDocument();
