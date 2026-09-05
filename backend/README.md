@@ -1,6 +1,6 @@
 # Blind Spot AI
 
-Blind Spot AI reviews decision documents from multiple perspectives, tracks how blind spots change across explicit revisions, and connects validated findings in a persistent knowledge graph. A React and TypeScript dashboard uploads documents to a FastAPI backend, where content is validated, normalized, optionally retrieved through RAG, and sent to Groq for structured analysis, comparison, or a six-specialist debate with moderator synthesis.
+Blind Spot AI reviews decision documents from multiple perspectives, tracks how blind spots change across explicit revisions, connects validated findings in a persistent knowledge graph, and answers grounded follow-up questions. A React and TypeScript dashboard uploads documents to a FastAPI backend, where content is validated, normalized, retrieved within an explicit scope, and sent to Groq for structured analysis, comparison, debate, or evidence-grounded conversation.
 
 ## Current features
 
@@ -12,7 +12,9 @@ Blind Spot AI reviews decision documents from multiple perspectives, tracks how 
 - Explicit, persistent version families with semantic old/new comparison and separate evidence citations
 - Persistent, document-scoped relationship graphs built deterministically from validated analysis, debate, comparison, and visual evidence
 - Typed graph diagnostics for unsupported risks/assumptions, unmitigated risks, repeated missing perspectives, and unaddressed recommendations
-- React dashboard with loading, empty, retry, error, analysis, debate, version, graph, diagnostic, and source states
+- Persistent document- or version-series-scoped conversations with bounded memory and validated citations
+- Browser-native optional voice input and spoken answers, with text-chat fallback
+- React dashboard with loading, empty, retry, error, analysis, debate, version, graph, chat, diagnostic, and source states
 - Backend and frontend automated tests
 
 ## Architecture and technology
@@ -31,11 +33,12 @@ text + optional vision evidence -> validated structured results
 optional chunking -> hashing embeddings -> per-document JSON vector index
 explicit version links -> deterministic diff -> isolated old/new semantic comparison
 validated structured outputs -> atomic JSON relationship graph
+user question -> scoped RAG + graph/analysis/debate/version context -> Groq -> validated sources
 ```
 
 The optional vision layer uses an OpenAI-compatible provider to turn selected visuals into validated textual evidence. The server assigns image/page/slide provenance, then persists that evidence in the existing normalized document. RAG, analysis, debate, and source validation therefore use the same pipeline for textual and visual evidence. The text model is unchanged.
 
-The repository's current RAG implementation uses deterministic local feature-hashing embeddings and a persistent JSON vector store. It does not require a model download or a separate vector database. RAG performs relevance retrieval; the knowledge graph stores explicit typed relationships. The graph does not replace retrieval and is not automatically injected into Groq prompts. The backend owns document processing, AI credentials, retrieval, schemas, source validation, and graph persistence. Frontend types mirror the Pydantic API contracts.
+The repository's current RAG implementation uses deterministic local feature-hashing embeddings and a persistent JSON vector store. It does not require a model download or a separate vector database. RAG performs relevance retrieval; the knowledge graph stores explicit typed relationships. Analysis, debate, and comparison do not automatically consume the graph, while conversational routing adds graph context for relevant questions. The backend owns document processing, AI credentials, retrieval, schemas, source validation, graph persistence, and conversation persistence. Frontend types mirror the Pydantic API contracts.
 
 Backend dependencies include FastAPI, Uvicorn, Pydantic, HTTPX, PyMuPDF, python-docx, python-pptx, Pillow, and Pytest. Frontend dependencies include React, Vite, TypeScript, Vitest, Testing Library, and jsdom.
 
@@ -49,23 +52,24 @@ Blindspot-AI/
 |-- backend/
 |   |-- .env.example
 |   |-- main.py                 FastAPI app, CORS, and exception handlers
-|   |-- config.py               upload, AI, RAG, graph, and origin configuration
+|   |-- config.py               upload, AI, RAG, graph, conversation, and origin configuration
 |   |-- requirements.txt
 |   |-- pytest.ini
 |   |-- README.md
 |   |-- ai/                     text/vision clients, prompts, JSON safety, embeddings
-|   |-- api/                    document, analysis, debate, comparison, RAG, and graph routes
+|   |-- api/                    document, analysis, debate, comparison, RAG, graph, and conversation routes
 |   |-- processing/             format-specific processors
 |   |-- rag/                    chunking and context construction
 |   |-- schemas/                Pydantic contracts
-|   |-- services/               orchestration, retrieval, graph ingestion, queries, and diagnostics
-|   |-- storage/                document, version, comparison, vector, and graph persistence
+|   |-- services/               analysis, debate, conversation, retrieval, graph, and comparison orchestration
+|   |-- storage/                document, version, comparison, vector, graph, and conversation persistence
 |   |-- data/
 |   |   |-- documents/
 |   |   |-- uploads/
 |   |   |-- version_groups/
 |   |   |-- comparison_cache/
-|   |   `-- knowledge_graph/
+|   |   |-- knowledge_graph/
+|   |   `-- conversations/
 |   `-- tests/
 `-- frontend/
     |-- .env.example
@@ -95,7 +99,7 @@ Copy-Item .env.example .env
 python -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-On macOS or Linux, activate with `source .venv/bin/activate` and copy with `cp .env.example .env`. Set `GROQ_API_KEY` in `backend/.env` for real analysis and debate calls. Upload, document retrieval, default RAG, health checks, and automated tests do not require that key.
+On macOS or Linux, activate with `source .venv/bin/activate` and copy with `cp .env.example .env`. Set `GROQ_API_KEY` in `backend/.env` for real analysis, debate, comparison, and conversational synthesis. Upload, document retrieval, local indexing, health checks, and automated tests do not require that key.
 
 ## Frontend setup and startup
 
@@ -134,6 +138,14 @@ Backend variables are documented in `backend/.env.example`.
 | `GRAPH_MAX_NODES` | `300` | Maximum nodes returned by one graph request |
 | `GRAPH_MAX_EDGES` | `600` | Maximum relationships returned by one graph request |
 | `GRAPH_MAX_TRAVERSAL_DEPTH` | `2` | Maximum bounded neighbor traversal depth (capped at 5) |
+| `CONVERSATION_MAX_MESSAGE_CHARS` | `4000` | Maximum question length |
+| `CONVERSATION_MAX_STORED_MESSAGES` | `40` | Hard cap on persisted messages per conversation |
+| `CONVERSATION_HISTORY_MESSAGES` | `8` | Recent messages supplied to the model |
+| `CONVERSATION_HISTORY_CHARS` | `6000` | Character cap for model-visible conversation history |
+| `CONVERSATION_RAG_TOP_K` | `4` | Retrieved chunks per scoped document |
+| `CONVERSATION_SERIES_DOCUMENT_LIMIT` | `3` | Recent versions retrieved when no version is named |
+| `CONVERSATION_GRAPH_NODE_LIMIT` | `80` | Graph nodes available to conversational routing |
+| `CONVERSATION_CONTEXT_CHARS` | `16000` | Combined grounded-context character cap |
 | `FRONTEND_ORIGINS` | local Vite origins | Explicit comma-separated CORS allowlist |
 | `MULTIMODAL_ENABLED` | `false` | Enables optional visual evidence extraction |
 | `VISION_PROVIDER` | `groq` | `groq` or a generic `openai_compatible` endpoint |
@@ -178,6 +190,16 @@ Normal graph reads include only the selected document. Version-series reads incl
 
 The graph view provides current-document and version-series scope, node-type filters, keyboard-selectable SVG nodes, textual connected relationships, provenance metadata, lifecycle outcomes, and deterministic “What am I missing?” diagnostics. The dependency-free SVG keeps the local setup small; backend limits prevent accidental oversized responses.
 
+## Conversational AI and voice
+
+Each conversation is created with an explicit `document` or `series` scope and is persisted as atomic local JSON under `backend/data/conversations/`. Document scope retrieves only the selected immutable document ID. Series scope resolves only versions in that document's explicit version family; a named version narrows retrieval, while an unqualified question uses a bounded number of recent versions.
+
+Every question uses document-scoped RAG. A small deterministic keyword router also requests bounded graph context for questions about risks, assumptions, evidence, agents, recommendations, missing perspectives, or version lifecycle. That graph context reuses already-ingested structured analysis, debate, comparison, diagnostics, and multimodal provenance; it does not rerun those expensive workflows. Only bounded recent messages are included for follow-ups. The resulting context is separated from system instructions as untrusted data before Groq synthesizes the response.
+
+The model can cite only opaque source IDs present in the supplied context. Unknown source and graph-node IDs are discarded. If an otherwise substantive answer has no valid citation or related finding, the service returns the explicit insufficient-evidence response instead of presenting it as grounded fact. Conversation IDs, document IDs, request length, retrieval size, graph size, stored history, and model context are all bounded.
+
+Voice is an optional frontend channel over this same API. Input uses the browser Web Speech `SpeechRecognition` API (including the common `webkitSpeechRecognition` implementation), places the transcript into the editable composer, and never intentionally stores raw audio. Output uses browser `speechSynthesis` and can be stopped. Support, languages, microphone permissions, network behavior, and voice quality vary by browser and operating system; unsupported or denied environments retain full text-chat functionality. Chromium-family browsers generally provide the broadest recognition support.
+
 ## Version memory and comparison
 
 Normal uploads remain standalone and are never grouped by filename or content. A family is created only when the user calls the new-version endpoint for a selected document. Each revision keeps its own immutable document ID, chronological version number, predecessor, timestamp, and optional label/notes. Family metadata is stored as atomic local JSON; a process lock prevents duplicate numbering, and only the latest revision can receive a successor.
@@ -196,6 +218,10 @@ Validated comparison reports are cached by immutable old ID, new ID, and model t
 - CORS uses explicit origins, methods, and headers and does not allow credentials.
 - React renders document and AI text as text, not raw HTML.
 - Backend 5xx/provider details are sanitized; the frontend also rejects unapproved 5xx details.
+- Document text and prior messages are delimited as untrusted prompt data and cannot redefine the conversation system instructions.
+- Conversational citations are accepted only when they match retrieved or scoped graph sources; invalid IDs are removed without inventing replacements.
+- Conversation lookup verifies both the validated conversation ID and its owning document ID.
+- Raw microphone audio is not intentionally recorded or persisted by the application.
 - The frontend aborts requests that exceed its configured timeout.
 - This local application has no authentication or per-user authorization; do not expose it as a multi-tenant public service without adding those controls.
 
@@ -215,6 +241,10 @@ Validated comparison reports are cached by immutable old ID, new ID, and model t
 | `POST` | `/api/documents/{document_id}/retrieve` | Retrieve document-scoped chunks |
 | `GET` | `/api/documents/{document_id}/graph` | Get a bounded document or version-series graph with optional node/relationship filters |
 | `GET` | `/api/documents/{document_id}/graph/nodes/{node_id}` | Get bounded neighbors for a graph node |
+| `POST` | `/api/documents/{document_id}/conversations` | Create a persistent document- or series-scoped conversation |
+| `GET` | `/api/documents/{document_id}/conversations/{conversation_id}` | Restore scoped conversation history |
+| `POST` | `/api/documents/{document_id}/conversations/{conversation_id}/messages` | Send a grounded question and return the validated answer |
+| `DELETE` | `/api/documents/{document_id}/conversations/{conversation_id}/messages` | Clear the conversation's messages |
 
 Retrieval accepts `{"query": "financial risks", "top_k": 3}`. Comparison accepts `{"old_document_id": "doc_...", "new_document_id": "doc_..."}`. The version upload is multipart with `file` plus optional `version_label` and `notes` fields. Graph reads accept `scope=document|series`, repeated `node_type` and `relationship_type` filters, and bounded `node_limit`, `edge_limit`, `depth`, and `limit` parameters where applicable.
 
@@ -232,11 +262,15 @@ npm run typecheck
 npm run build
 ```
 
-Tests use isolated storage and fake AI/embedding providers; they do not make external Groq calls.
+Tests use isolated storage and fake AI/embedding providers; they do not make external Groq calls. Conversation coverage includes persistence, bounded memory, follow-ups, document/version isolation, RAG and graph fallback, structured analysis/debate/version context, multimodal evidence reuse, citation filtering, prompt-injection boundaries, provider errors, invalid requests, browser voice support, permission denial, speech output, and chat UI states.
 
 ## Known limitations
 
 - There is no authentication or multi-user document ownership model.
+- Conversation JSON uses an in-process lock. Multiple backend worker processes require a transactional database or cross-process lock.
+- Conversation routing is intentionally lightweight and keyword-based; complex references outside the bounded recent history may require a more explicit question.
+- Browser speech recognition is not universally supported and may use a browser vendor's remote recognition service; text chat is always the fallback.
+- Streaming responses are not implemented; chat uses reliable non-streaming HTTP requests.
 - Analysis and debate reports are generated on demand and are not persisted.
 - Local JSON locking protects concurrent requests within one backend process; multi-process deployment would require a transactional database or cross-process lock.
 - Graph matching is deliberately conservative: differently worded findings remain distinct unless an explicit structured comparison connects them.

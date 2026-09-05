@@ -29,6 +29,7 @@ DOCUMENTS_DIR = DATA_DIR / "documents"
 VERSION_GROUPS_DIR = DATA_DIR / "version_groups"
 COMPARISON_CACHE_DIR = DATA_DIR / "comparison_cache"
 GRAPH_STORE_DIR = DATA_DIR / "knowledge_graph"
+CONVERSATION_STORE_DIR = DATA_DIR / "conversations"
 
 # Ensure storage directories exist at import time.
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
@@ -36,6 +37,7 @@ DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
 VERSION_GROUPS_DIR.mkdir(parents=True, exist_ok=True)
 COMPARISON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 GRAPH_STORE_DIR.mkdir(parents=True, exist_ok=True)
+CONVERSATION_STORE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Upload constraints
@@ -206,6 +208,17 @@ MAX_COMPARISON_CONTENT_CHARS = _env_int(
 GRAPH_MAX_NODES = max(10, _env_int("GRAPH_MAX_NODES", 300))
 GRAPH_MAX_EDGES = max(10, _env_int("GRAPH_MAX_EDGES", 600))
 GRAPH_MAX_TRAVERSAL_DEPTH = max(1, min(5, _env_int("GRAPH_MAX_TRAVERSAL_DEPTH", 2)))
+
+# Phase 10 grounded conversation limits. Stored history and model context are
+# bounded separately so conversations remain useful without unbounded prompts.
+CONVERSATION_MAX_MESSAGE_CHARS = max(100, min(20_000, _env_int("CONVERSATION_MAX_MESSAGE_CHARS", 4_000)))
+CONVERSATION_MAX_STORED_MESSAGES = max(2, min(100, _env_int("CONVERSATION_MAX_STORED_MESSAGES", 40)))
+CONVERSATION_HISTORY_MESSAGES = max(2, min(20, _env_int("CONVERSATION_HISTORY_MESSAGES", 8)))
+CONVERSATION_HISTORY_CHARS = max(500, min(20_000, _env_int("CONVERSATION_HISTORY_CHARS", 6_000)))
+CONVERSATION_RAG_TOP_K = max(1, min(10, _env_int("CONVERSATION_RAG_TOP_K", 4)))
+CONVERSATION_SERIES_DOCUMENT_LIMIT = max(1, min(10, _env_int("CONVERSATION_SERIES_DOCUMENT_LIMIT", 3)))
+CONVERSATION_GRAPH_NODE_LIMIT = max(10, min(GRAPH_MAX_NODES, _env_int("CONVERSATION_GRAPH_NODE_LIMIT", 80)))
+CONVERSATION_CONTEXT_CHARS = max(2_000, min(40_000, _env_int("CONVERSATION_CONTEXT_CHARS", 16_000)))
 
 # Embedding provider. "hashing" is the only provider implemented today: a
 # free, fully local, dependency-free, deterministic feature-hashing

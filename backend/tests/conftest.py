@@ -26,12 +26,14 @@ def client(tmp_path, monkeypatch):
     version_groups_dir = tmp_path / "version_groups"
     comparison_cache_dir = tmp_path / "comparison_cache"
     graph_store_dir = tmp_path / "knowledge_graph"
+    conversation_store_dir = tmp_path / "conversations"
     uploads_dir.mkdir()
     documents_dir.mkdir()
     vector_store_dir.mkdir()
     version_groups_dir.mkdir()
     comparison_cache_dir.mkdir()
     graph_store_dir.mkdir()
+    conversation_store_dir.mkdir()
 
     import config
 
@@ -41,6 +43,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "VERSION_GROUPS_DIR", version_groups_dir)
     monkeypatch.setattr(config, "COMPARISON_CACHE_DIR", comparison_cache_dir)
     monkeypatch.setattr(config, "GRAPH_STORE_DIR", graph_store_dir)
+    monkeypatch.setattr(config, "CONVERSATION_STORE_DIR", conversation_store_dir)
 
     import storage.document_store as store_module
 
@@ -103,6 +106,14 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(graph_ingestion_module, "version_store", isolated_version_store)
     monkeypatch.setattr(graph_service_module, "graph_store", isolated_graph_store)
     monkeypatch.setattr(graph_service_module, "version_store", isolated_version_store)
+
+    import storage.conversation_store as conversation_store_module
+    isolated_conversation_store = conversation_store_module.ConversationStore(conversation_store_dir)
+    monkeypatch.setattr(conversation_store_module, "conversation_store", isolated_conversation_store)
+
+    import services.conversation_service as conversation_service_module
+    monkeypatch.setattr(conversation_service_module, "conversation_store", isolated_conversation_store)
+    monkeypatch.setattr(conversation_service_module, "version_store", isolated_version_store)
 
     import main as main_module
 

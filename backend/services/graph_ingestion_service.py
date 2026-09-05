@@ -109,6 +109,7 @@ class _Builder:
         artifact_id: str,
         document_ids: list[str],
         version_group_id: str | None,
+        metadata: dict | None = None,
     ) -> GraphContribution:
         return GraphContribution(
             artifact_id=artifact_id,
@@ -116,6 +117,7 @@ class _Builder:
             version_group_id=version_group_id,
             nodes=sorted(self.nodes.values(), key=lambda item: item.id),
             edges=sorted(self.edges.values(), key=lambda item: item.id),
+            metadata=metadata or {},
             updated_at=datetime.now(timezone.utc),
         )
 
@@ -361,7 +363,8 @@ def ingest_analysis(
             item.priority.value,
         )
     contribution = builder.contribution(
-        f"analysis:{document.document_id}", [document.document_id], group_id
+        f"analysis:{document.document_id}", [document.document_id], group_id,
+        {"summary": _clean(report.summary), "overall_assessment": _clean(report.overall_assessment)},
     )
     store.upsert(contribution)
     return contribution
@@ -418,7 +421,13 @@ def ingest_debate(
             node = _add_assumption(builder, document, document_node, assumption, version)
             builder.edge(agent, node, GraphEdgeType.IDENTIFIED)
     contribution = builder.contribution(
-        f"debate:{document.document_id}", [document.document_id], group_id
+        f"debate:{document.document_id}", [document.document_id], group_id,
+        {
+            "overall_assessment": _clean(result.overall_assessment),
+            "agreements": [_clean(value, 600) for value in result.agreements],
+            "disagreements": [_clean(value, 600) for value in result.disagreements],
+            "final_blind_spots": [_clean(value, 600) for value in result.final_blind_spots],
+        },
     )
     store.upsert(contribution)
     return contribution
@@ -533,6 +542,7 @@ def ingest_comparison(
         f"comparison:{old.document_id}:{new.document_id}",
         [old.document_id, new.document_id],
         report.version_group_id,
+        {"summary": _clean(report.summary), "overall_change_assessment": _clean(report.overall_change_assessment)},
     )
     store.upsert(contribution)
     return contribution

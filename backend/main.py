@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse
 import config
 from api.analysis import router as analysis_router
 from api.comparison import router as comparison_router
+from api.conversations import router as conversations_router
 from api.debate import router as debate_router
 from api.documents import router as documents_router
 from api.graph import router as graph_router
@@ -34,7 +35,8 @@ app = FastAPI(
     description=(
         "Document ingestion pipeline that validates, stores, and normalizes "
         "uploaded files (PDF, PPTX, DOCX, TXT, images) into a common "
-        "internal representation for AI analysis and multi-agent review."
+        "internal representation for grounded conversation, AI analysis, "
+        "version comparison, knowledge-graph queries, and multi-agent review."
     ),
     version="0.1.0",
 )
@@ -44,7 +46,7 @@ if config.FRONTEND_ORIGINS:
         CORSMiddleware,
         allow_origins=list(config.FRONTEND_ORIGINS),
         allow_credentials=False,
-        allow_methods=["GET", "POST", "OPTIONS"],
+        allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type"],
     )
 
@@ -54,6 +56,7 @@ app.include_router(debate_router)
 app.include_router(rag_router)
 app.include_router(comparison_router)
 app.include_router(graph_router)
+app.include_router(conversations_router)
 
 
 @app.exception_handler(InvalidDocumentIdError)

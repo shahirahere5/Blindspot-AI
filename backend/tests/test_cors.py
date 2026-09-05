@@ -26,3 +26,15 @@ def test_unknown_origin_is_not_allowed(client):
 
     assert response.status_code == 400
     assert "access-control-allow-origin" not in response.headers
+
+
+def test_conversation_clear_delete_is_allowed_from_frontend(client):
+    response = client.options(
+        "/api/documents/doc_test/conversations/conv_test/messages",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "DELETE",
+        },
+    )
+    assert response.status_code == 200
+    assert "DELETE" in response.headers["access-control-allow-methods"]

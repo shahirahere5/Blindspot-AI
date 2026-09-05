@@ -224,6 +224,14 @@ def get_graph(
             "node_count": len(nodes),
             "edge_count": len(edges),
             "contribution_count": len(contributions),
+            "artifacts": [
+                {
+                    "type": item.artifact_id.split(":", 1)[0],
+                    "document_ids": item.document_ids,
+                    "metadata": item.metadata,
+                }
+                for item in contributions if item.metadata
+            ],
         },
     )
 

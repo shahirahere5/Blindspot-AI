@@ -106,6 +106,7 @@ class GraphContribution(BaseModel):
     version_group_id: str | None = None
     nodes: list[GraphNode]
     edges: list[GraphEdge]
+    metadata: dict[str, Any] = Field(default_factory=dict)
     updated_at: datetime
 
 
