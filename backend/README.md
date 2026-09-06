@@ -1,6 +1,8 @@
-# Blind Spot AI
+# Blind Spot AI — Backend
 
-Blind Spot AI reviews decision documents from multiple perspectives, tracks how blind spots change across explicit revisions, connects validated findings in a persistent knowledge graph, and answers grounded follow-up questions. A React and TypeScript dashboard uploads documents to a FastAPI backend, where content is validated, normalized, retrieved within an explicit scope, and sent to Groq for structured analysis, comparison, debate, or evidence-grounded conversation.
+> Part of the [Blind Spot AI](../README.md) project. This document covers the FastAPI backend specifically. See the [frontend README](../frontend/README.md) for the React dashboard.
+
+Blind Spot AI reviews decision documents from multiple perspectives, tracks how blind spots change across explicit revisions, connects validated findings in a persistent knowledge graph, and answers grounded follow-up questions. This backend validates uploaded content, normalizes it into a common representation, retrieves it within an explicit scope, and sends it to Groq for structured analysis, comparison, debate, or evidence-grounded conversation.
 
 ## Current features
 
@@ -16,6 +18,21 @@ Blind Spot AI reviews decision documents from multiple perspectives, tracks how 
 - Browser-native optional voice input and spoken answers, with text-chat fallback
 - React dashboard with loading, empty, retry, error, analysis, debate, version, graph, chat, diagnostic, and source states
 - Backend and frontend automated tests
+
+## How the backend was built: 10 phases
+
+The backend was built incrementally, with each phase adding a self-contained capability on top of a stable foundation, rather than as one monolithic build. Roughly, in order:
+
+1. **Document ingestion & processing** — Multipart upload endpoint with size/extension/MIME validation; format-specific processors (`processing/`) for TXT, PDF (PyMuPDF), DOCX (python-docx), PPTX (python-pptx), and images (Pillow), all normalized into one common internal document representation with stable, path-safe document IDs.
+2. **Structured AI analysis** — Integration with Groq (`ai/client.py`, `ai/prompts.py`) to turn normalized document content into a validated `AnalysisReport`: risks, assumptions, biases, missing perspectives, questions, and recommendations, with strict JSON schema validation (`schemas/analysis.py`) and safe error handling for malformed model output (`ai/json_utils.py`, `ai/safe_errors.py`).
+3. **Multi-agent debate system** — Six independent specialist agents (Optimist, Skeptic, Security, Financial, Ethics, Legal) plus a moderator that synthesizes their findings (`services/debate_service.py`, `ai/debate_prompts.py`), run under a shared controller with bounded concurrency, paced request starts, and finite rate-limit-aware retries.
+4. **Retrieval-Augmented Generation (RAG)** — An opt-in local retrieval layer (`rag/`, `ai/embeddings/`, `storage/vector_store.py`) using deterministic feature-hashing embeddings and a persistent JSON vector index, so large documents can be chunked and retrieved without requiring an external vector database or model download.
+5. **Version management & semantic comparison** — Explicit, user-initiated version families (`storage/version_store.py`) with chronological versioning, predecessor links, and process-locked numbering, feeding a comparison pipeline (`services/comparison_service.py`) that runs a deterministic structural diff first and then a separately-validated old/new semantic comparison (using RAG automatically for large pairs).
+6. **Knowledge graph construction & diagnostics** — Deterministic mapping of validated analysis, debate, and comparison output into a persistent, document-scoped relationship graph (`services/graph_ingestion_service.py`, `storage/graph_store.py`) with stable SHA-256-derived node/edge IDs, atomic upserts, and typed "What am I missing?" diagnostics (unsupported risks, unmitigated risks, repeated missing perspectives, unaddressed recommendations).
+7. **Grounded conversational AI** — Persistent, document- or version-series-scoped conversations (`services/conversation_service.py`, `storage/conversation_store.py`) that combine RAG retrieval with a lightweight keyword router for graph context, strict citation validation against only real source/graph IDs, and an explicit "insufficient evidence" fallback rather than presenting an ungrounded answer as fact.
+8. **Multimodal / vision processing** — An optional, provider-agnostic vision layer (`ai/vision/`, `services/multimodal_service.py`) that selectively analyzes standalone images, sparse-text/image-heavy PDF pages, and embedded PPTX pictures, assigns image/page/slide provenance, and merges the result into the same normalized document and evidence pipeline used by text.
+9. **Voice input/output** — Frontend-facing voice channel over the existing chat API using the browser's native `SpeechRecognition` (input) and `speechSynthesis` (output) APIs, with no raw audio persisted server-side and full text-chat fallback where unsupported.
+10. **Security, reliability & test hardening** — Path-traversal-safe storage, bounded upload sizes/timeouts/image pixel counts, sanitized 5xx/provider error responses, explicit CORS configuration, prompt-injection-resistant context separation for conversation, and a full Pytest suite (`tests/`) using isolated storage and fake AI/embedding providers so tests never make external Groq calls.
 
 ## Architecture and technology
 
@@ -48,42 +65,44 @@ Generated uploads, indexes, dependencies, builds, and caches are omitted.
 
 ```text
 Blindspot-AI/
-|-- .gitignore
-|-- backend/
-|   |-- .env.example
-|   |-- main.py                 FastAPI app, CORS, and exception handlers
-|   |-- config.py               upload, AI, RAG, graph, conversation, and origin configuration
-|   |-- requirements.txt
-|   |-- pytest.ini
-|   |-- README.md
-|   |-- ai/                     text/vision clients, prompts, JSON safety, embeddings
-|   |-- api/                    document, analysis, debate, comparison, RAG, graph, and conversation routes
-|   |-- processing/             format-specific processors
-|   |-- rag/                    chunking and context construction
-|   |-- schemas/                Pydantic contracts
-|   |-- services/               analysis, debate, conversation, retrieval, graph, and comparison orchestration
-|   |-- storage/                document, version, comparison, vector, graph, and conversation persistence
-|   |-- data/
-|   |   |-- documents/
-|   |   |-- uploads/
-|   |   |-- version_groups/
-|   |   |-- comparison_cache/
-|   |   |-- knowledge_graph/
-|   |   `-- conversations/
-|   `-- tests/
-`-- frontend/
-    |-- .env.example
-    |-- package.json
-    |-- package-lock.json
-    |-- vite.config.ts
-    |-- tsconfig.json
-    `-- src/
-        |-- App.tsx
-        |-- App.test.tsx
-        |-- components/
-        |-- services/           centralized API client and tests
-        |-- test/               test setup and fixtures
-        `-- types/              backend contract mirrors
+├── .gitignore
+├── README.md                  Project overview (root)
+├── backend/
+│   ├── .env.example
+│   ├── main.py                 FastAPI app, CORS, and exception handlers
+│   ├── config.py               upload, AI, RAG, graph, conversation, and origin configuration
+│   ├── requirements.txt
+│   ├── pytest.ini
+│   ├── README.md                This file
+│   ├── ai/                     text/vision clients, prompts, JSON safety, embeddings
+│   ├── api/                    document, analysis, debate, comparison, RAG, graph, and conversation routes
+│   ├── processing/             format-specific processors
+│   ├── rag/                    chunking and context construction
+│   ├── schemas/                Pydantic contracts
+│   ├── services/               analysis, debate, conversation, retrieval, graph, and comparison orchestration
+│   ├── storage/                document, version, comparison, vector, graph, and conversation persistence
+│   ├── data/
+│   │   ├── documents/
+│   │   ├── uploads/
+│   │   ├── version_groups/
+│   │   ├── comparison_cache/
+│   │   ├── knowledge_graph/
+│   │   └── conversations/
+│   └── tests/
+└── frontend/
+    ├── .env.example
+    ├── README.md               Frontend documentation
+    ├── package.json
+    ├── package-lock.json
+    ├── vite.config.ts
+    ├── tsconfig.json
+    └── src/
+        ├── App.tsx
+        ├── App.test.tsx
+        ├── components/
+        ├── services/           centralized API client and tests
+        ├── test/               test setup and fixtures
+        └── types/              backend contract mirrors
 ```
 
 ## Backend setup and startup
@@ -112,7 +131,7 @@ Copy-Item .env.example .env
 npm run dev
 ```
 
-Open `http://localhost:5173`. API documentation is at `http://127.0.0.1:8000/docs`; health is at `http://127.0.0.1:8000/health`.
+Open `http://localhost:5173`. API documentation is at `http://127.0.0.1:8000/docs`; health is at `http://127.0.0.1:8000/health`. See the [frontend README](../frontend/README.md) for more detail on the dashboard itself.
 
 ## Environment variables
 
@@ -197,7 +216,7 @@ Node and edge IDs are stable SHA-256-derived identifiers scoped by document, ver
 
 Normal graph reads include only the selected document. Version-series reads include explicitly grouped versions and their comparison contributions. Evidence is promoted only when its source location matches normalized document content; image-derived blocks retain visual provenance. Neighbor queries validate node IDs and bound relationship filters, depth, nodes, and edges.
 
-The graph view provides current-document and version-series scope, node-type filters, keyboard-selectable SVG nodes, textual connected relationships, provenance metadata, lifecycle outcomes, and deterministic “What am I missing?” diagnostics. The dependency-free SVG keeps the local setup small; backend limits prevent accidental oversized responses.
+The graph view provides current-document and version-series scope, node-type filters, keyboard-selectable SVG nodes, textual connected relationships, provenance metadata, lifecycle outcomes, and deterministic "What am I missing?" diagnostics. The dependency-free SVG keeps the local setup small; backend limits prevent accidental oversized responses.
 
 ## Conversational AI and voice
 

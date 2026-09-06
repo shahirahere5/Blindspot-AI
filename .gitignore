@@ -1,3 +1,11 @@
+# Python virtual environments (any location in the repo)
+.venv/
+venv/
+env/
+ENV/
+*/.venv/
+*/venv/
+
 # Frontend dependencies and build output
 frontend/node_modules/
 frontend/dist/
@@ -7,5 +15,16 @@ frontend/.env
 frontend/.env.*
 !frontend/.env.example
 
+# Python bytecode / caches (root-level safety net; backend/.gitignore also covers these)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
 # Workspace tooling
 .dist/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
