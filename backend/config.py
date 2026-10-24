@@ -19,11 +19,20 @@ except ImportError:
     # variables can still be set directly in the shell/OS.
     pass
 
+
 # ---------------------------------------------------------------------------
 # Base paths
 # ---------------------------------------------------------------------------
 BACKEND_DIR = Path(__file__).resolve().parent
-DATA_DIR = BACKEND_DIR / "data"
+
+# Vercel allows temporary writes under /tmp.
+# Local development continues to use backend/data.
+DATA_DIR = (
+    Path("/tmp/blindspot-ai")
+    if os.environ.get("VERCEL")
+    else BACKEND_DIR / "data"
+)
+
 UPLOADS_DIR = DATA_DIR / "uploads"
 DOCUMENTS_DIR = DATA_DIR / "documents"
 VERSION_GROUPS_DIR = DATA_DIR / "version_groups"
@@ -31,13 +40,16 @@ COMPARISON_CACHE_DIR = DATA_DIR / "comparison_cache"
 GRAPH_STORE_DIR = DATA_DIR / "knowledge_graph"
 CONVERSATION_STORE_DIR = DATA_DIR / "conversations"
 
-# Ensure storage directories exist at import time.
-UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-DOCUMENTS_DIR.mkdir(parents=True, exist_ok=True)
-VERSION_GROUPS_DIR.mkdir(parents=True, exist_ok=True)
-COMPARISON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-GRAPH_STORE_DIR.mkdir(parents=True, exist_ok=True)
-CONVERSATION_STORE_DIR.mkdir(parents=True, exist_ok=True)
+# Ensure storage directories exist.
+for directory in (
+    UPLOADS_DIR,
+    DOCUMENTS_DIR,
+    VERSION_GROUPS_DIR,
+    COMPARISON_CACHE_DIR,
+    GRAPH_STORE_DIR,
+    CONVERSATION_STORE_DIR,
+):
+    directory.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Upload constraints
